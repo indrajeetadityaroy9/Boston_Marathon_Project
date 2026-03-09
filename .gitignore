@@ -1,0 +1,7 @@
+# Raw and cleaned data CSV files
+data/*.csv
+cleaned_data/
+
+# Python
+__pycache__/
+*.pyc
