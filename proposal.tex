@@ -1,0 +1,200 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{amsmath, amssymb}
+\usepackage{hyperref}
+
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+\title{Statistical Analysis and Prediction\\of Boston Marathon Finish Times}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+    This project analyzes Boston Marathon results from 1897 to 2019 using a three-stage approach: statistical testing, mixed-effects modeling, and machine learning prediction.
+
+    In the first stage, we test whether finish times differ by age group and gender. We find that all six age groups have significantly different finish times, and the gap between male and female runners, while still present, shrinks over the decades.
+
+    In the second stage, we build a model that accounts for the fact that many runners appear in the dataset multiple times across different years. About half the dataset comes from repeat runners, and each runner has their own baseline speed and ages differently. A mixed-effects model captures this by giving each runner their own intercept and aging rate.
+
+    In the third stage, we use machine learning to predict finish times from mid-race checkpoint splits. Because the checkpoint times are nearly identical to each other (correlations above 0.99), standard regression fails, so we use regularized models instead.
+\end{abstract}
+
+\section{Introduction}
+
+Marathon finish times depend on many factors: age, gender, pacing strategy, training, and long-term trends in the sport. Looking at averages alone---for example, that men finish faster than women on average---is not enough to draw conclusions. We need formal statistical tests to determine whether observed differences are real or could occur by chance.
+
+\subsection{The Problem with Standard Tests}
+
+Common statistical tests like the $t$-test (which compares two group averages) and ANOVA (which compares more than two group averages) assume three things about the data:
+
+\begin{itemize}
+    \item \textbf{Normality:} the data should follow a bell-shaped curve. We test this using the Shapiro-Wilk test, which checks whether a sample can plausibly come from a normal distribution. On 5,000-row samples, normality is rejected for every group ($p < 10^{-13}$). The distribution of finish times is right-skewed (skewness = 0.87), meaning there is a long tail of slow finishers pulling the distribution to the right. The kurtosis of 1.01 means the tails are heavier than a normal distribution. Taking the logarithm of finish times reduces skewness from 0.87 to 0.32 and kurtosis from 1.01 to 0.05, making the distribution much more symmetric, but it still does not pass the normality test.
+
+    \item \textbf{Equal variance:} the spread of data should be similar across groups. Male finish times (std = 2,527 sec) are more spread out than female times (std = 2,303 sec).
+
+    \item \textbf{Independence:} each observation should be unrelated to every other. This assumption is violated because about half the rows in the dataset come from runners who appear multiple times.
+\end{itemize}
+
+Because normality is violated, we cannot rely on parametric tests alone. Instead, we run both parametric tests (which assume normality but are robust to mild violations at large sample sizes) and non-parametric tests (which make no distributional assumptions and work with ranks instead of raw values). If both types of tests agree, we can be more confident in the result.
+
+\subsection{Why Effect Sizes Matter}
+
+With over 600,000 observations, almost any difference---no matter how small---is ``statistically significant'' (i.e., has a very small $p$-value). A $p$-value only tells us whether a difference exists; it does not tell us whether the difference is large enough to matter in practice.
+
+To address this, we report effect sizes alongside $p$-values:
+\begin{itemize}
+    \item \textbf{Hedges' $g$:} measures the difference between two group averages in units of standard deviations. A value of 0.2 is considered a small effect, 0.5 is medium, and 0.8 is large. For the gender gap, Hedges' $g = -0.63$, which is a medium effect (the negative sign means males are faster).
+    \item \textbf{Eta-squared ($\eta^2$):} measures what fraction of the total variation in finish time is explained by group membership. For age groups, $\eta^2 = 0.06$, meaning age group explains 6\% of the variation.
+\end{itemize}
+
+\subsection{The Repeated-Measurement Problem}
+
+Standard tests treat every row as an independent observation. But in this dataset, approximately 97,088 runners appear in multiple years. A fast runner in 2010 is likely still fast in 2015---their results are correlated. Ignoring this correlation inflates test statistics (making results look more significant than they are) and produces incorrect standard errors.
+
+To handle this, we use a linear mixed-effects model. This model has two layers:
+\begin{itemize}
+    \item \textbf{Fixed effects:} the overall trends that apply to all runners (e.g., the average effect of aging, the average gender gap).
+    \item \textbf{Random effects:} runner-specific adjustments. Each runner gets their own baseline finish time (random intercept) and their own aging rate (random slope).
+\end{itemize}
+
+We verify whether this model structure is appropriate using two diagnostics from the data:
+\begin{itemize}
+    \item The intra-class correlation (ICC) is 0.69. This means that 68.9\% of the variance in finish time is due to stable differences between runners (some runners are consistently fast, others consistently slow). Only 31.1\% is race-to-race variation within the same runner. A high ICC means the random intercepts are necessary.
+    \item Among 22,453 runners with at least 5 years of data, we fit a simple regression line (finish time vs. age) for each runner individually. The average slope is $+77.8$ seconds per year (runners slow down by about 1.3 minutes per year on average), but the standard deviation across runners is 265.5 seconds per year. Some runners slow down much faster, and 34.6\% actually improve over time. This wide spread means the random slopes on age are necessary---a single fixed slope does not capture the diversity.
+\end{itemize}
+
+\subsection{Project Structure}
+
+The project follows three stages:
+\begin{enumerate}
+    \item \textbf{Inference:} test whether finish times differ across age groups and gender, and measure how large the differences are.
+    \item \textbf{Hierarchical modeling:} fit a mixed-effects model that accounts for repeat runners and estimates population-level aging effects while allowing individual variation.
+    \item \textbf{Prediction:} use machine learning models on checkpoint split data to predict finish times, serving as a secondary validation.
+\end{enumerate}
+
+\section{Data}
+
+\subsection{Source and Scope}
+
+The dataset contains Boston Marathon results from 1897 to 2019: 615,682 rows and 39 columns. Each row is one runner in one year. Variables include finish time, age, gender, overall placement, and checkpoint split times. The average finish time is 13,675 seconds (about 3 hours 48 minutes) with a standard deviation of 2,560 seconds. Checkpoint split times (at 5k, 10k, 15k, 20k, half, 25k, 30k, 35k, and 40k) are only available for the years 2015--2017, covering 79,038 runners.
+
+\subsection{Key Data Characteristics}
+
+\begin{itemize}
+    \item \textbf{Gender:} 400,989 male (65.1\%) and 214,693 female (34.9\%). No missing values. Males average 13,133 seconds (about 3:39), females average 14,685 seconds (about 4:05)---a gap of about 26 minutes.
+
+    \item \textbf{Age:} 180,737 entries (29.4\%) have no recorded age, mostly from the early decades. For years with sufficient age data, 7,289 missing values (1.7\% of rows with age) are filled in using K-nearest-neighbors imputation, which estimates missing ages based on similar runners' year, gender, and finish time. All primary analyses exclude these imputed values to avoid introducing artificial patterns.
+
+    Among non-imputed rows, older runners tend to finish slower: Pearson $r = 0.21$ (a weak linear relationship), Spearman $\rho = 0.23$ (a weak monotonic relationship). After removing the confounding influence of gender (men are both older on average and faster), the partial correlation rises to $r = 0.28$, meaning the true age effect is somewhat stronger than the raw correlation suggests.
+
+    \item \textbf{Repeat runners:} 102,658 names appear more than once. Because runners are identified only by display name, some of these are false matches---two different people with the same name decades apart. We filter these by checking whether each runner's recorded age changes match the elapsed years (within $\pm$8 years to allow for rounding). This removes 5,570 probable name collisions, leaving 97,088 plausible repeat runners covering 51.6\% of the dataset. The median runner appears twice; the most frequent appears 44 times.
+
+    \item \textbf{Split times:} the nine checkpoint times are extremely correlated with each other. Adjacent checkpoints (e.g., 20k and 25k) have correlations above $r = 0.99$, and even the most distant pair (5k and finish time) has $r = 0.89$. This multicollinearity means that if we try to use all checkpoints as predictors in a standard regression, the model cannot tell which checkpoints matter and produces unstable, unreliable coefficients. This is why we need regularized regression (ridge or LASSO) instead.
+\end{itemize}
+
+\subsection{Exploratory Findings}
+
+\textbf{Gender differences.} We test whether males and females have different finish times using two approaches. Welch's $t$-test ($t = -243.5$, $p < 0.001$) compares the group averages while allowing for unequal variance between groups. Mann-Whitney U ($p < 0.001$) is a non-parametric alternative that ranks all finish times and tests whether one group tends to rank higher. Both strongly reject the null hypothesis that the groups are the same. The effect size is medium (Hedges' $g = -0.63$). The gap narrows over time: $g = -0.93$ in the 1970s (large effect), $g = -0.60$ in the 1990s, and $g = -0.47$ in the 2010s (approaching small).
+
+\textbf{Age group differences.} We split runners into six brackets (14--29, 30--39, 40--49, 50--59, 60--69, 70+) and test whether finish times differ across them. One-way ANOVA ($F = 5589.45$, $p < 0.001$) compares the group averages; the $F$-statistic measures the ratio of between-group variation to within-group variation, and a large $F$ means the groups differ more than expected by chance. Kruskal-Wallis ($H = 30951.69$, $p < 0.001$) is the non-parametric version, using ranks instead of raw values. Both confirm the groups differ.
+
+To find out which specific pairs differ, we use two post-hoc tests. Tukey's HSD compares every pair of group averages while controlling the overall false-positive rate. Dunn's test does the same thing non-parametrically, using Bonferroni correction (dividing the significance threshold by the number of comparisons to avoid false positives). Both tests find that all 15 pairs of age groups are significantly different.
+
+Eta-squared is 0.06, meaning age group explains 6\% of the total variance in finish time. The 30--39 group is the fastest on average (13,597 sec). Times increase monotonically after that: 40--49 averages 13,945 sec, 50--59 averages 14,641 sec, 60--69 averages 15,890 sec, and 70+ averages 17,547 sec.
+
+\textbf{Repeat runners.} The ICC of 0.69 tells us that if we pick two random finish times from the same runner, they are much more similar to each other than two random times from different runners. Specifically, 68.9\% of the total variation comes from between-runner differences (consistent fast or slow runners), not from year-to-year fluctuations. This is a strong signal that a model needs to account for runner identity.
+
+Among the 22,453 runners with at least 5 years of age data, the average aging slope is $+77.8$ seconds per year---runners get about 1.3 minutes slower each year on average. But the standard deviation is 265.5 sec/yr, meaning runners vary enormously. 65.4\% show a positive slope (getting slower) while 34.6\% show a negative slope (getting faster over the years they appear). A single fixed aging rate misses this diversity entirely.
+
+\textbf{Pacing.} We classify each runner's pacing strategy by comparing their second-half time to their first-half time. A ratio below 0.99 means they run the second half faster (negative split); 0.99 to 1.01 means roughly even; above 1.01 means they slow down (positive split). The vast majority (88--96\% depending on the year) run a positive split. Only 2--5\% run a negative split.
+
+\section{Research Questions}
+
+The three research questions form a progression. Each one addresses a limitation of the previous one.
+
+\begin{itemize}
+    \item \textbf{Q1 (Inference):} Do finish times differ across age groups and gender? Are the differences large enough to matter in practice, or are they only statistically significant because of the large sample size?
+
+    This is the natural starting point: before building models, we first establish whether the basic group-level patterns (older runners are slower, men are faster) hold up under formal testing and whether they are practically meaningful given the large sample size.
+
+    \item \textbf{Q2 (Longitudinal):} How does an individual runner's performance change with age? Do all runners slow down at the same rate, or do different runners age differently?
+
+    Q1 compares different people at different ages (cross-sectional comparison). But a 50-year-old racing in 2019 is a different person than a 30-year-old racing in 2019---they may come from different training eras, have different qualification standards, or differ in ways unrelated to aging. The only way to measure true aging effects is to track the same runner over multiple years and see how their times change. This requires a model that can separate each runner's individual trajectory from the overall population trend. Q2 also addresses the independence violation that Q1 ignores: 51.6\% of the data comes from repeat runners, and treating their rows as independent inflates the Q1 test statistics.
+
+    \item \textbf{Q3 (Predictive Validation):} How accurately can we predict a runner's finish time from their checkpoint splits? Does a simple linear model suffice, or do nonlinear models perform better?
+
+    Q1 and Q2 are about understanding---they explain which factors are associated with finish time and how large the effects are. Q3 asks a different question: can we actually predict a runner's finish time using the patterns we find? This serves two purposes. First, it tests whether the relationships discovered in Q1 and Q2 are strong enough to be useful for prediction, not just statistically significant. Second, comparing linear models (ridge, LASSO) against a nonlinear model (gradient boosting) reveals whether the relationship between checkpoint splits and finish time is a simple straight line or involves interactions and curves that the linear models miss.
+\end{itemize}
+
+\section{Methods}
+
+\subsection{Q1: Group Comparisons}
+
+The goal of Q1 is to establish whether the group-level patterns visible in the descriptive statistics---older runners finishing slower, men finishing faster than women---are statistically real and practically meaningful. This is the necessary first step before building more complex models: if basic group differences do not hold up under formal testing, there is no reason to model them further. We also need to quantify how large the differences are, because with 600,000 observations, even trivial differences produce tiny $p$-values.
+
+We test for group differences using both parametric and non-parametric methods. The reason for using both is that normality is violated, so parametric tests alone are questionable. But parametric tests are known to be robust (i.e., still give correct results) when the sample size is large, even if the data is not perfectly normal. If the parametric and non-parametric tests give the same answer, we can be confident in the conclusion.
+
+\begin{itemize}
+    \item \textbf{One-way ANOVA} tests whether at least one age group has a different average finish time. It works by comparing the variation between group averages to the variation within groups. If the between-group variation is large relative to within-group variation (a large $F$-statistic), we conclude the groups differ.
+
+    \item \textbf{Tukey's Honestly Significant Difference (HSD)} follows up on a significant ANOVA result by testing every pair of groups. It adjusts for the fact that testing many pairs increases the chance of a false positive. It reports the mean difference between each pair and whether it is significant.
+
+    \item \textbf{Kruskal-Wallis} is the non-parametric version of ANOVA. Instead of comparing means, it ranks all observations from smallest to largest and tests whether the ranks are evenly distributed across groups. It does not assume normality.
+
+    \item \textbf{Dunn's test} follows up on a significant Kruskal-Wallis result, testing each pair of groups. Bonferroni correction divides the significance threshold ($\alpha = 0.05$) by the number of comparisons (15 pairs for 6 groups) to control false positives.
+
+    \item \textbf{Welch's $t$-test} compares the averages of two groups (male vs. female). Unlike the standard $t$-test, it does not assume the two groups have the same variance. We use it instead of the standard $t$-test because male and female finish times have different spreads.
+
+    \item \textbf{Mann-Whitney U} is the non-parametric version of the $t$-test. It tests whether one group tends to produce larger values than the other, without assuming any particular distribution.
+
+    \item \textbf{Hedges' $g$} measures how far apart two group averages are, expressed in standard deviation units. It is like Cohen's $d$ but with a small correction for sample size bias. A value of 0.2 is small, 0.5 is medium, and 0.8 is large.
+
+    \item \textbf{Eta-squared ($\eta^2$)} measures the proportion of total variance explained by group membership. It answers the question: of all the variation in finish times, how much is due to age group differences versus individual variation?
+\end{itemize}
+
+\subsection{Q2: Mixed-Effects Modeling}
+
+Q1 compares groups of different people (e.g., all 30-year-olds vs. all 50-year-olds), but this cross-sectional approach cannot distinguish true aging from cohort effects. For example, the 50-year-olds racing in 2019 may have trained under different methods, faced different qualification standards, or represent a different population of runners than the 30-year-olds. The only way to isolate the aging effect is to follow the same runners over time and measure how their individual finish times change as they get older.
+
+Additionally, Q1 treats every row as independent, but 51.6\% of the data comes from repeat runners. Their rows are correlated---a fast runner stays fast across years---and ignoring this correlation makes the Q1 test statistics unreliable (inflated significance, incorrect standard errors). The mixed-effects model addresses both problems at once: it tracks individual runners longitudinally and properly accounts for the within-runner correlation.
+
+A standard regression treats every row as independent, ignoring the fact that rows from the same runner are correlated. A mixed-effects model fixes this by adding runner-specific terms:
+
+\[
+y_{ij} = \underbrace{\beta_0 + \beta_1 \cdot \text{age}_{ij} + \beta_2 \cdot \text{gender}_i}_{\text{fixed effects (population trends)}} + \underbrace{b_{0i} + b_{1i} \cdot \text{age}_{ij}}_{\text{random effects (per runner)}} + \varepsilon_{ij}
+\]
+
+\begin{itemize}
+    \item $y_{ij}$ is the finish time for runner $i$ in race $j$.
+    \item $\beta_0$ is the overall average finish time (intercept for the whole population).
+    \item $\beta_1$ is the average aging effect across all runners (how many seconds slower per year of age, on average).
+    \item $\beta_2$ is the average gender difference.
+    \item $b_{0i}$ is runner $i$'s personal offset from the population average. A fast runner has a negative $b_{0i}$; a slow runner has a positive one. This is justified by the ICC of 0.69, which shows that runners differ substantially in baseline ability.
+    \item $b_{1i}$ is runner $i$'s personal aging rate, deviating from the population average $\beta_1$. Some runners slow down faster than average (positive $b_{1i}$), others slower or even improve (negative $b_{1i}$). This is justified by the large standard deviation (265.5 sec/yr) in within-runner aging slopes.
+    \item $\varepsilon_{ij}$ is the residual error---the remaining variation not explained by any of the above.
+\end{itemize}
+
+The random effects $b_{0i}$ and $b_{1i}$ are assumed to follow a bivariate normal distribution with mean zero. The model estimates the variance of each random effect and their correlation, which tells us whether faster runners also tend to age more slowly (or vice versa).
+
+\subsection{Q3: Predictive Models}
+
+Q1 and Q2 focus on inference---understanding which factors relate to finish time and estimating their effects. Q3 asks a complementary question: can these patterns actually predict a runner's finish time? This serves as a reality check on the earlier findings. If age and gender explain meaningful variation (as Q1 and Q2 suggest), then models using these features plus mid-race checkpoint times should predict finish times accurately. If they cannot, it suggests the statistical associations found in Q1 and Q2 are too weak or too noisy to be practically useful.
+
+Comparing a linear model (ridge/LASSO) against a nonlinear model (gradient boosting) also reveals whether the relationship between split times and finish time is a simple straight line or involves interactions (e.g., whether slowing down after the half depends on how fast the first half is). If the nonlinear model performs much better, it indicates that the linear assumptions behind ridge and LASSO are too simple for this data.
+
+We train three models on the 2015--2017 split-time data (79,038 rows) to predict finish time from the nine checkpoint times and demographic features (age, gender):
+
+\begin{itemize}
+    \item \textbf{Ridge regression} is ordinary least squares with an added penalty that shrinks all coefficients toward zero. The penalty is proportional to the sum of squared coefficients. This stabilizes the estimates when predictors are highly correlated (as the checkpoint times are, with $r > 0.99$ between adjacent splits). Without this penalty, the coefficients are large and unstable because the model cannot distinguish the contribution of one checkpoint from the next.
+
+    \item \textbf{LASSO regression} uses a similar penalty, but proportional to the sum of absolute values of coefficients instead of squared values. This has the additional property of shrinking some coefficients to exactly zero, effectively performing automatic feature selection. It is useful for determining which checkpoints are most informative.
+
+    \item \textbf{Gradient boosting} builds an ensemble of small decision trees, where each tree corrects the errors of the previous ones. Unlike ridge and LASSO, it can capture nonlinear relationships---for example, if the effect of a slow first 5k on finish time depends on whether the runner speeds up or slows down later.
+\end{itemize}
+
+All models are evaluated using leave-one-year-out cross-validation: we train on two of the three years and predict the third. This is repeated three times (each year is the test set once). This approach tests whether the models generalize to a new year of racing rather than just memorizing the training data.
+
+\end{document}
