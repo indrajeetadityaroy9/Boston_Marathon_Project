@@ -1,18 +1,18 @@
-# Boston Marathon Statistical Analysis (MATH 7343) WIP!!!
+# Boston Marathon Statistical Analysis (MATH 7343)
 
-Statistical analysis of Boston Marathon race results from 1897-2019. The pipeline cleans and unifies ~120 per-year CSV files, then runs exploratory data analysis with hypothesis testing.
+Statistical analysis of Boston Marathon results from 1897-2019 using a two-stage approach: (1) statistical testing to determine whether finish times differ by age group and gender, and (2) mixed-effects modeling to track how individual runners' performances change with age over repeated appearances. The pipeline cleans and unifies ~120 per-year CSV files, runs exploratory data analysis with hypothesis testing, and includes a pacing strategy analysis.
 
 ## Setup
 
-### 1. Install dependencies
+### Install dependencies
 
 ```bash
-pip install pandas numpy scikit-learn scipy statsmodels scikit-posthocs
+pip install pandas numpy scikit-learn scipy statsmodels scikit-posthocs matplotlib
 ```
 
-The raw CSV files are included in `data/` (sourced from [adrian3/Boston-Marathon-Data-Project](https://github.com/adrian3/Boston-Marathon-Data-Project)). The wheelchair and diverted variants are automatically skipped during cleaning.
+The raw CSV files are included in `data/` (sourced from [adrian3/Boston-Marathon-Data-Project](https://github.com/adrian3/Boston-Marathon-Data-Project)). Wheelchair and diverted variants are automatically skipped during cleaning.
 
-## Running the pipeline
+## Running the Pipeline
 
 ### Step 1: Clean the data
 
@@ -20,7 +20,7 @@ The raw CSV files are included in `data/` (sourced from [adrian3/Boston-Marathon
 python data_cleaning.py
 ```
 
-This reads all CSVs from `data/`, unifies them into a single schema, parses times, cleans gender and age values, imputes missing ages via KNN, validates, and writes `cleaned_data/boston_marathon_cleaned.csv`.
+Reads all CSVs from `data/`, unifies them into a single schema, parses times, cleans gender and age values, imputes missing ages via KNN, validates, and writes `cleaned_data/boston_marathon_cleaned.csv`.
 
 ### Step 2: Run the exploratory data analysis
 
@@ -28,20 +28,39 @@ This reads all CSVs from `data/`, unifies them into a single schema, parses time
 python eda.py
 ```
 
-This reads the cleaned CSV and prints results for 10 analysis sections:
+Prints results for 7 analysis sections:
 
-1. Descriptive statistics (overall, by gender, by decade)
-2. Percentile analysis
-3. Normality and goodness-of-fit tests (Shapiro-Wilk, Anderson-Darling, Lilliefors)
-4. Tail behavior and extreme value analysis (GEV fit, log-normal fit)
-5. Correlation analysis (Pearson, Spearman, point-biserial, partial)
-6. Time series metrics (yearly trends, winning time regression)
-7. Gender comparison tests (Welch's t-test, Mann-Whitney U, Levene's, KS, Hedges' g)
-8. Age group analysis (Kruskal-Wallis, ANOVA, Dunn's post-hoc)
-9. Outlier detection (IQR, Z-score, modified Z-score/MAD)
-10. Split-time pacing analysis (2015-2017 only)
+1. **Descriptive statistics** — overall, by gender, by decade; skewness and kurtosis
+2. **Normality tests** — Shapiro-Wilk on raw and log-transformed times (5000-row samples); shape comparison before/after log transform
+3. **Correlation analysis** — Pearson, Spearman, and partial correlation (age vs. finish time, controlling for gender); excludes KNN-imputed ages
+4. **Gender comparison** — Welch's t-test, Mann-Whitney U, Hedges' g effect size; gender gap by decade
+5. **Age group analysis** — Kruskal-Wallis, one-way ANOVA with eta-squared, Dunn's post-hoc (Bonferroni), Tukey's HSD
+6. **Split-time analysis** — checkpoint correlation matrix (2015-2017), pacing classification (negative/even/positive split) by year
+7. **Repeat runner profiling** — name collision filtering, appearance counts, age span, ICC for random intercepts justification, within-runner aging slopes for random slopes justification
 
-## Cleaned data dictionary
+### Step 3: Run the pacing strategy analysis
+
+Open and run the Jupyter notebook:
+
+```bash
+jupyter notebook pacing_analysis.ipynb
+```
+
+Analyzes pacing strategies using 2015-2017 split data (~79,000 runners):
+
+- Classifies runners as negative split (ratio < 0.99), even split (0.99-1.01), or positive split (> 1.01) based on second-half/first-half pace ratio
+- **Kruskal-Wallis test** — tests whether finish time distributions differ across pacing groups (H = 1709.57, p < 0.001)
+- **Dunn's post-hoc test** — all three pairwise comparisons significant (Bonferroni correction)
+- **Effect size** — eta-squared = 0.019 (1.9% of finish time variance explained by pacing group)
+- **Gender breakdown** — pacing profiles are nearly identical across genders (~93% positive split for both)
+- Visualizations: pacing distribution bar chart, finish time box plots by pacing group, grouped bar chart by gender
+
+## Research Questions
+
+- **Q1 (Inference)**: Do finish times differ across age groups and gender? Are the differences practically meaningful, or only statistically significant because of the large sample size? Tested with both parametric (Welch's t-test, ANOVA, Tukey's HSD) and non-parametric (Mann-Whitney U, Kruskal-Wallis, Dunn's) methods, with effect sizes (Hedges' g, eta-squared) to assess practical significance.
+- **Q2 (Longitudinal)**: How does an individual runner's performance change with age? Do all runners slow down at the same rate? Addressed with a linear mixed-effects model with per-runner random intercepts (justified by ICC = 0.69) and random slopes on age (justified by high variance in within-runner aging slopes). This accounts for the non-independence of repeat runners (~51.6% of the dataset) that Q1 ignores.
+
+## Cleaned Data Dictionary
 
 `cleaned_data/boston_marathon_cleaned.csv` — 615,682 rows, 39 columns.
 

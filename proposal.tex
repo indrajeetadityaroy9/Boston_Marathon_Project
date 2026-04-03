@@ -72,7 +72,7 @@ The project follows three stages:
 \begin{enumerate}
     \item \textbf{Inference:} test whether finish times differ across age groups and gender, and measure how large the differences are.
     \item \textbf{Hierarchical modeling:} fit a mixed-effects model that accounts for repeat runners and estimates population-level aging effects while allowing individual variation.
-    \item \textbf{Prediction:} use machine learning models on checkpoint split data to predict finish times, serving as a secondary validation.
+    \item \textbf{Pacing analysis:} test whether pacing strategy (how a runner distributes effort between the first and second half of the race) is associated with finish time, using checkpoint split data from 2015--2017.
 \end{enumerate}
 
 \section{Data}
@@ -109,7 +109,11 @@ Eta-squared is 0.06, meaning age group explains 6\% of the total variance in fin
 
 Among the 22,453 runners with at least 5 years of age data, the average aging slope is $+77.8$ seconds per year---runners get about 1.3 minutes slower each year on average. But the standard deviation is 265.5 sec/yr, meaning runners vary enormously. 65.4\% show a positive slope (getting slower) while 34.6\% show a negative slope (getting faster over the years they appear). A single fixed aging rate misses this diversity entirely.
 
-\textbf{Pacing.} We classify each runner's pacing strategy by comparing their second-half time to their first-half time. A ratio below 0.99 means they run the second half faster (negative split); 0.99 to 1.01 means roughly even; above 1.01 means they slow down (positive split). The vast majority (88--96\% depending on the year) run a positive split. Only 2--5\% run a negative split.
+\textbf{Pacing.} We classify each runner's pacing strategy by comparing their second-half time to their first-half time. The pace ratio is defined as second-half time divided by first-half time. A ratio below 0.99 means they run the second half faster (negative split); 0.99 to 1.01 means roughly even; above 1.01 means they slow down (positive split). Across the 79,576 runners with complete split data, 93.0\% run a positive split, 4.2\% run an even split, and only 2.7\% run a negative split.
+
+Even-split runners have the lowest median finish time (206.2 min), followed by negative-split runners (215.1 min), with positive-split runners the slowest (227.9 min). A Kruskal-Wallis test confirms that the three pacing groups have significantly different finish time distributions ($H = 1709.57$, $p < 0.001$). Dunn's post-hoc test with Bonferroni correction finds all three pairwise comparisons significant. The effect size is $\eta^2 = 0.019$, meaning pacing strategy explains 1.9\% of the variance in finish time---smaller than age group's 6\% but still a detectable effect. This is expected: pacing strategy is partly a symptom of fitness level (faster runners tend to pace more evenly), not solely an independent cause of performance.
+
+Pacing patterns are consistent across gender: 93.3\% of males and 92.8\% of females run a positive split, making gender an unlikely confound in this analysis.
 
 \section{Research Questions}
 
@@ -123,10 +127,6 @@ The three research questions form a progression. Each one addresses a limitation
     \item \textbf{Q2 (Longitudinal):} How does an individual runner's performance change with age? Do all runners slow down at the same rate, or do different runners age differently?
 
     Q1 compares different people at different ages (cross-sectional comparison). But a 50-year-old racing in 2019 is a different person than a 30-year-old racing in 2019---they may come from different training eras, have different qualification standards, or differ in ways unrelated to aging. The only way to measure true aging effects is to track the same runner over multiple years and see how their times change. This requires a model that can separate each runner's individual trajectory from the overall population trend. Q2 also addresses the independence violation that Q1 ignores: 51.6\% of the data comes from repeat runners, and treating their rows as independent inflates the Q1 test statistics.
-
-    \item \textbf{Q3 (Predictive Validation):} How accurately can we predict a runner's finish time from their checkpoint splits? Does a simple linear model suffice, or do nonlinear models perform better?
-
-    Q1 and Q2 are about understanding---they explain which factors are associated with finish time and how large the effects are. Q3 asks a different question: can we actually predict a runner's finish time using the patterns we find? This serves two purposes. First, it tests whether the relationships discovered in Q1 and Q2 are strong enough to be useful for prediction, not just statistically significant. Second, comparing linear models (ridge, LASSO) against a nonlinear model (gradient boosting) reveals whether the relationship between checkpoint splits and finish time is a simple straight line or involves interactions and curves that the linear models miss.
 \end{itemize}
 
 \section{Methods}
@@ -179,22 +179,30 @@ y_{ij} = \underbrace{\beta_0 + \beta_1 \cdot \text{age}_{ij} + \beta_2 \cdot \te
 
 The random effects $b_{0i}$ and $b_{1i}$ are assumed to follow a bivariate normal distribution with mean zero. The model estimates the variance of each random effect and their correlation, which tells us whether faster runners also tend to age more slowly (or vice versa).
 
-\subsection{Q3: Predictive Models}
+All models are evaluated using leave-one-year-out cross-validation: we train on two of the three years and predict the third. This is repeated three times (each year is the test set once). This approach tests whether the models generalize to a new year of racing rather than just memorizing the training data.
 
-Q1 and Q2 focus on inference---understanding which factors relate to finish time and estimating their effects. Q3 asks a complementary question: can these patterns actually predict a runner's finish time? This serves as a reality check on the earlier findings. If age and gender explain meaningful variation (as Q1 and Q2 suggest), then models using these features plus mid-race checkpoint times should predict finish times accurately. If they cannot, it suggests the statistical associations found in Q1 and Q2 are too weak or too noisy to be practically useful.
+\subsection{Pacing Strategy Analysis}
 
-Comparing a linear model (ridge/LASSO) against a nonlinear model (gradient boosting) also reveals whether the relationship between split times and finish time is a simple straight line or involves interactions (e.g., whether slowing down after the half depends on how fast the first half is). If the nonlinear model performs much better, it indicates that the linear assumptions behind ridge and LASSO are too simple for this data.
+The pacing analysis asks a different question from Q1 and Q2: does \emph{how} a runner distributes effort across the race affect their finish time? Checkpoint split times are only available for 2015--2017 (79,576 runners with complete data). We use the half-marathon split and the official finish time to derive a pace ratio:
 
-We train three models on the 2015--2017 split-time data (79,038 rows) to predict finish time from the nine checkpoint times and demographic features (age, gender):
+\[
+\text{pace ratio} = \frac{\text{second-half time}}{\text{first-half time}} = \frac{\text{finish time} - \text{half time}}{\text{half time}}
+\]
+
+Each runner is classified into one of three groups based on their pace ratio:
 
 \begin{itemize}
-    \item \textbf{Ridge regression} is ordinary least squares with an added penalty that shrinks all coefficients toward zero. The penalty is proportional to the sum of squared coefficients. This stabilizes the estimates when predictors are highly correlated (as the checkpoint times are, with $r > 0.99$ between adjacent splits). Without this penalty, the coefficients are large and unstable because the model cannot distinguish the contribution of one checkpoint from the next.
-
-    \item \textbf{LASSO regression} uses a similar penalty, but proportional to the sum of absolute values of coefficients instead of squared values. This has the additional property of shrinking some coefficients to exactly zero, effectively performing automatic feature selection. It is useful for determining which checkpoints are most informative.
-
-    \item \textbf{Gradient boosting} builds an ensemble of small decision trees, where each tree corrects the errors of the previous ones. Unlike ridge and LASSO, it can capture nonlinear relationships---for example, if the effect of a slow first 5k on finish time depends on whether the runner speeds up or slows down later.
+    \item \textbf{Negative split} (ratio $< 0.99$): second half faster than first.
+    \item \textbf{Even split} ($0.99 \leq$ ratio $\leq 1.01$): both halves roughly equal (1\% tolerance).
+    \item \textbf{Positive split} (ratio $> 1.01$): second half slower than first.
 \end{itemize}
 
-All models are evaluated using leave-one-year-out cross-validation: we train on two of the three years and predict the third. This is repeated three times (each year is the test set once). This approach tests whether the models generalize to a new year of racing rather than just memorizing the training data.
+The hypotheses are:
+\begin{itemize}
+    \item $H_0$: Finish time distributions are identical across pacing groups.
+    \item $H_a$: At least one pacing group has a significantly different finish time distribution.
+\end{itemize}
+
+Because finish times are right-skewed and normality is rejected (consistent with Section~2), we use non-parametric tests. The Kruskal-Wallis test assesses whether at least one group differs. If significant, Dunn's post-hoc test with Bonferroni correction identifies which specific pairs of groups differ. We report eta-squared ($\eta^2$) as the effect size to measure practical significance, allowing direct comparison with the age group result from Q1 ($\eta^2 = 0.06$). We also break down pacing distributions by gender to check whether gender is a confounding variable in the pacing group comparison.
 
 \end{document}
