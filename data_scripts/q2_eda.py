@@ -15,8 +15,8 @@ warnings.filterwarnings('ignore', category=UserWarning, module='statsmodels')
 
 _FIT_KWARGS = dict(method='lbfgs', maxiter=200)
 
-CLEANED_PATH = Path(__file__).resolve().parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
-SUMMARY_PATH = Path(__file__).resolve().parent / 'q2_results_summary.txt'
+CLEANED_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
+SUMMARY_PATH = Path(__file__).resolve().parent.parent / 'q2_results_summary.txt'
 
 
 def load_and_filter_data():

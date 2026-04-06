@@ -16,7 +16,7 @@ from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.meta_analysis import effectsize_smd
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-CLEANED_PATH = Path(__file__).resolve().parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
+CLEANED_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
 
 SPLIT_SECS = ['5k_seconds', '10k_seconds', '15k_seconds', '20k_seconds',
               'half_seconds', '25k_seconds', '30k_seconds', '35k_seconds', '40k_seconds']
