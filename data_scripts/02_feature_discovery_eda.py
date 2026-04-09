@@ -30,9 +30,9 @@ def main():
     df['decade'] = (df['year'] // 10) * 10
 
     # --- SECTION 1: DESCRIPTIVE STATISTICS ---
-    # Summarize the data before any testing to understand center, spread, and shape.
-    # Skewness and kurtosis indicate whether the data is symmetric and how heavy the tails are,
-    # which informs the choice between parametric and non-parametric tests later.
+    # [Feature discovery for RQ1] Summarize center, spread, and shape of the target variable.
+    # Skewness and kurtosis inform whether parametric models (OLS) or non-parametric
+    # approaches are appropriate for the prediction baseline.
     print("\nSECTION 1: DESCRIPTIVE STATISTICS")
 
     print("\nOverall:")
@@ -49,12 +49,9 @@ def main():
     print(df.groupby('decade')['seconds'].describe().to_string())
 
     # --- SECTION 2: NORMALITY TESTS ---
-    # Many statistical tests (t-test, ANOVA) assume normally distributed data.
-    # Shapiro-Wilk checks this assumption. We test both raw and log-transformed times
-    # because if log-transform makes the data more normal, the mixed-effects model
-    # could use log(seconds) as the response variable for better-behaved residuals.
-    # We use a 5000-row sample because Shapiro-Wilk is designed for moderate sample sizes
-    # and would reject normality for trivially small deviations at n=600k.
+    # [Feature discovery for RQ1] Check distributional assumptions for prediction models.
+    # Log-transform may improve residual behavior in mixed-effects models (RQ2).
+    # 5000-row subsample avoids trivial rejection at n=600k.
     print("\nSECTION 2: NORMALITY TESTS")
 
     strata = {
@@ -86,8 +83,9 @@ def main():
     print(f"  Log:  skewness={log_secs.skew():.4f}, kurtosis={log_secs.kurtosis():.4f}")
 
     # --- SECTION 3: CORRELATION ANALYSIS ---
-    # Measures whether older runners tend to have slower finish times.
-    # Excludes KNN-imputed ages to avoid artificial correlation from the imputation model.
+    # [Feature discovery for RQ1] Quantifies age-time and gender-time relationships
+    # to justify including age, age^2, and gender as predictors in the baseline model.
+    # Excludes KNN-imputed ages to avoid artificial correlation.
     print("\nSECTION 3: CORRELATION ANALYSIS")
 
     valid_age = df[df['age'].notna() & ~df['age_imputed']].copy()
@@ -114,8 +112,8 @@ def main():
     print(f"  Partial r (age | gender): {partial_r:.4f}, p={partial_model.pvalues['age']:.2e}")
 
     # --- SECTION 4: GENDER COMPARISON ---
-    # Tests whether the difference in finish times between men and women is statistically
-    # significant and practically meaningful (Q1).
+    # [Feature discovery for RQ1] Tests and quantifies the gender effect on finish time.
+    # Hedges' g provides the effect size that contextualizes gender as a predictor.
     print("\nSECTION 4: GENDER COMPARISON")
 
     m_sec = df[df['gender'] == 'M']['seconds'].dropna()
@@ -163,10 +161,9 @@ def main():
     print(pd.DataFrame(gd_rows).set_index('decade').to_string())
 
     # --- SECTION 5: AGE GROUP ANALYSIS ---
-    # Tests whether finish times differ across age brackets (Q1).
-    # Both parametric and non-parametric approaches are used because
-    # normality was rejected but ANOVA is robust to moderate non-normality
-    # at large sample sizes, and running both shows consistent results.
+    # [Feature discovery for RQ1] Tests age-group effects and quantifies explained variance
+    # (eta-squared). The nonlinear age pattern (30-39 fastest, monotonic increase after)
+    # motivates the quadratic age term in the RQ1 and RQ2 prediction models.
     print("\nSECTION 5: AGE GROUP ANALYSIS")
 
     aged = df[df['age'].between(14, 90) & ~df['age_imputed']].copy()
@@ -207,10 +204,9 @@ def main():
     print(tukey.summary())
 
     # --- SECTION 6: SPLIT-TIME ANALYSIS (2015-2017) ---
-    # Split checkpoint times are only available for 2015-2017.
-    # The correlation matrix shows how strongly each checkpoint predicts the final time.
-    # High correlations between adjacent checkpoints (r > 0.99) indicate severe
-    # multicollinearity among split predictors.
+    # [Feature exploration for RQ3] Checkpoint-to-finish correlations quantify how
+    # predictive each split is for finish time. High inter-split correlations (r > 0.99)
+    # motivate Ridge regression over OLS in the progressive prediction model.
     print("\nSECTION 6: SPLIT-TIME ANALYSIS (2015-2017)")
 
     splits = df[df['year'].between(2015, 2017)].copy()
@@ -235,10 +231,9 @@ def main():
     print((pd.crosstab(splits['year'], splits['pacing_type'], normalize='index') * 100).to_string())
 
     # --- SECTION 7: REPEAT RUNNER PROFILING ---
-    # About half the dataset consists of runners who appear in multiple years.
-    # Treating their rows as independent would violate the assumptions of standard tests.
-    # This section quantifies the repeat-runner structure to justify using a linear
-    # mixed-effects model with per-runner random intercepts and slopes (Q2).
+    # [Justification for RQ2] Quantifies repeat-runner structure: ICC justifies random
+    # intercepts, slope variance justifies random slopes. These motivate the mixed-effects
+    # personalization model that produces BLUPs for individual prediction.
     print("\nSECTION 7: REPEAT RUNNER PROFILING")
 
     name_counts = df['display_name'].value_counts()
@@ -282,9 +277,9 @@ def main():
     )
     runner_age_stats = runner_age_stats[runner_age_stats['n_races'] > 1]
 
-    print(f"\nAge Span (n={len(runner_age_stats)} runners with ≥2 age observations):")
+    print(f"\nAge Span (n={len(runner_age_stats)} runners with >=2 age observations):")
     print(f"  Mean: {runner_age_stats['age_span'].mean():.1f} years, Median: {runner_age_stats['age_span'].median():.1f} years")
-    print(f"  Span ≥5yr: {(runner_age_stats['age_span'] >= 5).sum()}, ≥10yr: {(runner_age_stats['age_span'] >= 10).sum()}")
+    print(f"  Span >=5yr: {(runner_age_stats['age_span'] >= 5).sum()}, >=10yr: {(runner_age_stats['age_span'] >= 10).sum()}")
 
     # ICC (intra-class correlation) measures what fraction of the total variance in
     # finish time is due to stable differences between runners vs. race-to-race variation.
@@ -302,13 +297,13 @@ def main():
     k0 = (n_obs - (ni ** 2).sum() / n_obs) / (n_runners - 1)
     icc = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
 
-    print(f"\nICC(1): {icc:.4f} — {icc*100:.1f}% of variance is between runners")
-    print(f"  → {'strong' if icc > 0.3 else 'moderate' if icc > 0.1 else 'weak'} justification for random intercepts")
+    print(f"\nICC(1): {icc:.4f} -- {icc*100:.1f}% of variance is between runners")
+    print(f"  -> {'strong' if icc > 0.3 else 'moderate' if icc > 0.1 else 'weak'} justification for random intercepts")
 
     # Per-runner OLS slopes measure how each individual's finish time changes with age.
     # If all runners aged the same way, one fixed slope would suffice. High variance
     # in slopes means runners age differently, justifying per-runner random slopes
-    # in the mixed-effects model. Only runners with ≥5 year age span are used so
+    # in the mixed-effects model. Only runners with >=5 year age span are used so
     # each slope is estimated from a meaningful range of ages.
     runners_for_slope = runner_age_stats[runner_age_stats['age_span'] >= 5].index
     slope_df = repeat_with_age[
@@ -321,11 +316,11 @@ def main():
         include_groups=False,
     ).dropna()
 
-    print(f"\nWithin-Runner Aging Slopes (n={len(runner_slopes)}, age span ≥5yr):")
+    print(f"\nWithin-Runner Aging Slopes (n={len(runner_slopes)}, age span >=5yr):")
     print(f"  Mean: {runner_slopes.mean():.1f} sec/yr, Median: {runner_slopes.median():.1f} sec/yr, Std: {runner_slopes.std():.1f} sec/yr")
     print(f"  Slowing: {(runner_slopes > 0).sum()} ({(runner_slopes > 0).sum()/len(runner_slopes)*100:.1f}%), "
           f"Improving: {(runner_slopes < 0).sum()} ({(runner_slopes < 0).sum()/len(runner_slopes)*100:.1f}%)")
-    print(f"  → high slope variance justifies random slopes on age")
+    print(f"  -> high slope variance justifies random slopes on age")
 
 
 if __name__ == '__main__':

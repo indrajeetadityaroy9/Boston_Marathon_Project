@@ -1,4 +1,17 @@
-#!/usr/bin/env python3.11
+#!/usr/bin/env python3
+"""RQ2: Personalized Prediction via Mixed-Effects Models.
+
+Fits linear mixed-effects models with runner-level random intercepts and slopes
+to quantify the value of personalization for repeat Boston Marathon runners.
+
+Models:
+  M2.0  OLS baseline on repeat-runner subset
+  M2.1  Random intercept: seconds ~ age_c + female + year_c + (1|runner)
+  M2.2  Random intercept + slope: seconds ~ age_c + female + year_c + (1 + age_c|runner)
+
+Sample: 188,310 observations from 65,590 repeat runners (2000-2019).
+Exports per-runner BLUPs to cleaned_data/runner_blups.csv for use by RQ3.
+"""
 
 from pathlib import Path
 import time
@@ -39,10 +52,8 @@ def load_and_filter_data():
     year_diff = np.diff(df['year'].values)
     bad_gap = same_runner & (np.abs(age_diff - year_diff) > 8)
     bad_runners_set = set(df['display_name'].values[1:][bad_gap])
-    n_total_runners = df['display_name'].nunique()
-    plausible_mask = ~df['display_name'].isin(bad_runners_set)
-    n_removed = n_total_runners - (n_total_runners - len(bad_runners_set))
-    df = df[plausible_mask].copy()
+    n_removed = len(bad_runners_set)
+    df = df[~df['display_name'].isin(bad_runners_set)].copy()
     print(f"4. Age-consistency filter (+/-8yr): removed {n_removed:,}, "
           f"retained {len(df):,} rows, {df['display_name'].nunique():,} runners")
 
@@ -54,7 +65,6 @@ def load_and_filter_data():
           f"{df['display_name'].nunique():,} runners")
 
     return df
-
 
 
 def compute_icc(df, groups, y):
@@ -81,8 +91,7 @@ def compute_icc(df, groups, y):
     print(f"2. Conditional ICC (after age, gender, year): {icc_cond:.4f} ({icc_cond*100:.1f}%)")
     print(f"   tau^2={tau2_c:,.0f}, sigma^2={sig2_c:,.0f}")
 
-    return {'icc_anova': icc_anova, 'icc_conditional': icc_cond,
-            'tau2_cond': tau2_c, 'sigma2_cond': sig2_c}, m1_reml
+    return m1_reml
 
 
 def compute_runner_slopes(df):
@@ -105,25 +114,14 @@ def compute_runner_slopes(df):
     runner_slopes = grp['_dxdy'].sum() / grp['_dx2'].sum()
 
     n = len(runner_slopes)
-    result = {
-        'n_slopes': n,
-        'mean_slope': runner_slopes.mean(),
-        'std_slope': runner_slopes.std(),
-        'median_slope': runner_slopes.median(),
-        'pct_slowing': (runner_slopes > 0).mean() * 100,
-        'pct_improving': (runner_slopes < 0).mean() * 100,
-    }
-
     print(f"\nQ2 sample slopes (age span >=5yr): n={n}")
-    print(f"  Mean: {result['mean_slope']:.1f} sec/yr")
-    print(f"  Std:  {result['std_slope']:.1f} sec/yr")
-    print(f"  Median: {result['median_slope']:.1f} sec/yr")
-    print(f"  Slowing (positive): {result['pct_slowing']:.1f}%")
-    print(f"  Improving (negative): {result['pct_improving']:.1f}%")
+    print(f"  Mean: {runner_slopes.mean():.1f} sec/yr")
+    print(f"  Std:  {runner_slopes.std():.1f} sec/yr")
+    print(f"  Median: {runner_slopes.median():.1f} sec/yr")
+    print(f"  Slowing (positive): {(runner_slopes > 0).mean() * 100:.1f}%")
+    print(f"  Improving (negative): {(runner_slopes < 0).mean() * 100:.1f}%")
     print(f"\n  (Note: Q2 sample is restricted to 2000-2019 with age-consistency filter;"
-          f" full-sample slopes from eda.py may differ)")
-
-    return result
+          f" full-sample slopes from 02_feature_discovery_eda.py may differ)")
 
 
 def fit_mixed_models(df, y, groups, exog, exog_re, m1_reml):
@@ -230,14 +228,6 @@ def model_selection(m0, m1_ml, m2_ml):
         print(f"  {name:>4} {k:>4} {llf:>14.1f} {aic:>14.1f} {bic:>14.1f}"
               f"  (dAIC={aic - best_aic:+.1f}, dBIC={bic - best_bic:+.1f})")
 
-    return {
-        'lr_01': lr_01, 'p_standard_01': p_std_01, 'p_corrected_01': p_corr_01,
-        'lr_12': lr_12, 'p_standard_12': p_std_12, 'p_corrected_12': p_corr_12,
-        'm0_llf': m0.llf, 'm0_aic': m0.aic, 'm0_bic': m0.bic,
-        'm1_llf': m1_ml.llf, 'm1_aic': m1_ml.aic, 'm1_bic': m1_ml.bic,
-        'm2_llf': m2_ml.llf, 'm2_aic': m2_ml.aic, 'm2_bic': m2_ml.bic,
-    }
-
 
 def variance_decomposition(m2_reml, df, exog):
     print("\nSTEP 7: VARIANCE DECOMPOSITION")
@@ -262,18 +252,11 @@ def variance_decomposition(m2_reml, df, exog):
     print(f"\n  Marginal R^2 (fixed only):     {r2_marginal:.4f}")
     print(f"  Conditional R^2 (fixed+random): {r2_conditional:.4f}")
 
-    return {
-        'var_fixed': var_fixed, 'tau2_intercept': tau2_0,
-        'var_slope': var_slope, 'sigma2': sigma2, 'total_var': total,
-        'r2_marginal': r2_marginal, 'r2_conditional': r2_conditional,
-    }
-
 
 def residual_diagnostics(m2_reml, df):
     print("\nSTEP 8: RESIDUAL DIAGNOSTICS")
 
     resid = m2_reml.resid
-    result = {}
 
     print(f"\n--- Conditional Residuals ---")
     skew_val = stats.skew(resid)
@@ -285,8 +268,6 @@ def residual_diagnostics(m2_reml, df):
     sw_stat, sw_p = stats.shapiro(
         pd.Series(resid).sample(n=5000, random_state=42).values)
     print(f"  Shapiro-Wilk (n=5000): W={sw_stat:.4f}, p={sw_p:.2e}")
-    result.update({'resid_skew': skew_val, 'resid_kurt': kurt_val,
-                   'shapiro_w': sw_stat, 'shapiro_p': sw_p})
 
     re_df = pd.DataFrame(m2_reml.random_effects).T
     for i, col in enumerate(re_df.columns):
@@ -304,11 +285,6 @@ def residual_diagnostics(m2_reml, df):
         print(f"  Top 10 most extreme {label}s:")
         for rank, idx in enumerate(top10, 1):
             print(f"    {rank}. {re_df.index[idx]}: {vals[idx]:.1f}")
-        result[f're_{label}_mean'] = vals.mean()
-        result[f're_{label}_std'] = vals.std()
-        result[f're_{label}_skew'] = stats.skew(vals)
-        result[f're_{label}_kurt'] = stats.kurtosis(vals)
-        result[f're_{label}_n_extreme'] = n_extreme
 
     df_r = df[['year', 'gender', 'age']].copy()
     df_r['resid'] = resid
@@ -322,8 +298,6 @@ def residual_diagnostics(m2_reml, df):
     print(f"\n  Flagged years (|mean resid| > 100s): {flagged}/{len(year_means)}")
     print(f"  Year-level residual std: {year_means.std():.1f}s")
     print(f"  NOTE: Linear year effect is insufficient. Consider year as factor.")
-    result['year_flagged_count'] = flagged
-    result['year_resid_std'] = year_means.std()
 
     print(f"\n--- Mean Residual by Gender ---")
     for g, mr in df_r.groupby('gender')['resid'].mean().items():
@@ -334,12 +308,10 @@ def residual_diagnostics(m2_reml, df):
     for decile, mr in df_r.groupby('age_decile', observed=True)['resid'].mean().items():
         print(f"  {decile}: {mr:>8.1f}")
 
-    return result
 
-
-def additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re):
-    print("\nSTEP 9: ADDITIONAL ANALYSES")
-    result = {}
+def random_effects_summary(m2_reml):
+    """Print random effects correlation and interpretation."""
+    print("\nSTEP 9: RANDOM EFFECTS SUMMARY")
 
     cov_re = m2_reml.cov_re
     corr = cov_re.iloc[0, 1] / np.sqrt(cov_re.iloc[0, 0] * cov_re.iloc[1, 1])
@@ -350,42 +322,61 @@ def additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re):
               f"steeper positive slopes (age more)")
     else:
         print(f"  Interpretation: faster runners tend to age more slowly")
-    result['re_correlation'] = corr
 
-    print(f"\n--- Gender x Age Interaction ---")
-    exog_int = sm.add_constant(df[['age_c', 'female', 'year_c']].copy())
-    exog_int['age_c:female'] = df['age_c'].values * df['female'].values
 
-    print("  Fitting interaction model (ML)...")
-    int_result = MixedLM(y, exog_int, groups=groups, exog_re=exog_re).fit(
-        reml=False, **_FIT_KWARGS)
-    print(f"  M2_interaction_ML: converged={int_result.converged}")
+def export_blups(m2_reml, df):
+    """Export per-runner BLUPs (random intercepts and slopes) for use by RQ3."""
+    print("\nSTEP 10: BLUP EXPORT")
 
-    coef = int_result.fe_params['age_c:female']
-    se = int_result.bse_fe['age_c:female']
-    pval = int_result.pvalues['age_c:female']
-    d_aic = int_result.aic - m2_ml.aic
-    male_rate = int_result.fe_params['age_c']
-    female_rate = male_rate + coef
+    re_dict = m2_reml.random_effects
+    blup_rows = []
+    for name, effects in re_dict.items():
+        blup_rows.append({
+            'display_name': name,
+            'blup_intercept': effects.iloc[0],
+            'blup_slope': effects.iloc[1],
+        })
+    blup_df = pd.DataFrame(blup_rows)
 
-    print(f"  age_c:female coefficient: {coef:.2f}")
-    print(f"  SE: {se:.2f}")
-    print(f"  p-value: {pval:.2e}")
-    print(f"  dAIC vs base M2: {d_aic:+.1f}")
-    print(f"  Male aging rate: {male_rate:.1f} sec/yr")
-    print(f"  Female aging rate: {female_rate:.1f} sec/yr")
-    if pval < 0.05:
-        print(f"  -> Men and women age at significantly different rates")
-    else:
-        print(f"  -> No significant gender difference in aging rate")
+    output_path = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'runner_blups.csv'
+    blup_df.to_csv(output_path, index=False)
+    print(f"  Exported {len(blup_df):,} runner BLUPs to {output_path.name}")
+    print(f"  Intercept: mean={blup_df['blup_intercept'].mean():.1f}, "
+          f"std={blup_df['blup_intercept'].std():.1f}")
+    print(f"  Slope: mean={blup_df['blup_slope'].mean():.2f}, "
+          f"std={blup_df['blup_slope'].std():.2f}")
 
-    result.update({
-        'interaction_coef': coef, 'interaction_se': se,
-        'interaction_p': pval, 'interaction_daic': d_aic,
-        'male_aging_rate': male_rate, 'female_aging_rate': female_rate,
-    })
-    return result
 
+def prediction_evaluation(m2_reml, df, exog):
+    """Evaluate prediction: value of personalization = marginal RMSE - conditional RMSE."""
+    print("\nSTEP 11: PREDICTION EVALUATION (value of personalization)")
+
+    y = df['seconds'].values
+
+    # Marginal prediction: fixed effects only (prediction for new/unknown runners)
+    marg_pred = exog.values @ m2_reml.fe_params.values
+    marg_rmse = np.sqrt(np.mean((y - marg_pred) ** 2))
+    marg_mae = np.mean(np.abs(y - marg_pred))
+
+    # Conditional prediction: fixed effects + BLUPs (prediction for known runners)
+    cond_rmse = np.sqrt(np.mean(m2_reml.resid ** 2))
+    cond_mae = np.mean(np.abs(m2_reml.resid))
+
+    personalization_value = marg_rmse - cond_rmse
+
+    print(f"\n  {'Metric':<25} {'Marginal':>14} {'Conditional':>14} {'Improvement':>14}")
+    print(f"  {'':>25} {'(new runner)':>14} {'(known runner)':>14} {'':>14}")
+    print(f"  {'-'*25} {'-'*14} {'-'*14} {'-'*14}")
+    print(f"  {'RMSE (seconds)':<25} {marg_rmse:>14.1f} {cond_rmse:>14.1f} "
+          f"{personalization_value:>14.1f}")
+    print(f"  {'RMSE (minutes)':<25} {marg_rmse/60:>14.1f} {cond_rmse/60:>14.1f} "
+          f"{personalization_value/60:>14.1f}")
+    print(f"  {'MAE (seconds)':<25} {marg_mae:>14.1f} {cond_mae:>14.1f} "
+          f"{marg_mae - cond_mae:>14.1f}")
+
+    print(f"\n  Value of personalization: knowing the runner reduces RMSE by "
+          f"{personalization_value:.0f}s ({personalization_value/60:.1f} min)")
+    print(f"  This is the improvement RQ2 provides over the RQ1 demographic baseline.")
 
 
 def main():
@@ -396,18 +387,22 @@ def main():
 
     df = load_and_filter_data()
 
+    print("\nSTEP 2: FEATURE ENGINEERING")
     df.sort_values('display_name', inplace=True)
     df.reset_index(drop=True, inplace=True)
 
-    df['age_c'] = df['age'] - df['age'].mean()
+    age_mean = df['age'].mean()
+    df['age_c'] = df['age'] - age_mean
     df['year_c'] = df['year'] - 2010
     df['female'] = (df['gender'] == 'F').astype(int)
     y = df['seconds'].values
     groups = df['display_name'].values
     exog = sm.add_constant(df[['age_c', 'female', 'year_c']])
     exog_re = sm.add_constant(df[['age_c']])
+    print(f"  Age centered at {age_mean:.1f}, year centered at 2010")
+    print(f"  Exog: {list(exog.columns)}, Exog_re: {list(exog_re.columns)}")
 
-    _, m1_reml = compute_icc(df, groups, y)
+    m1_reml = compute_icc(df, groups, y)
     compute_runner_slopes(df)
 
     m0, m1_reml, m1_ml, m2_reml, m2_ml = fit_mixed_models(
@@ -416,7 +411,9 @@ def main():
     model_selection(m0, m1_ml, m2_ml)
     variance_decomposition(m2_reml, df, exog)
     residual_diagnostics(m2_reml, df)
-    additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re)
+    random_effects_summary(m2_reml)
+    export_blups(m2_reml, df)
+    prediction_evaluation(m2_reml, df, exog)
 
     print(f"\nTotal runtime: {time.time() - t0:.0f}s ({(time.time() - t0)/60:.1f} min)")
 

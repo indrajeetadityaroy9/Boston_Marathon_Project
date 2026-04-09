@@ -8,7 +8,7 @@ from sklearn.impute import KNNImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / 'data'
 OUTPUT_DIR = BASE_DIR / 'cleaned_data'
 
@@ -43,9 +43,14 @@ def parse_time_to_seconds(series):
 
 def load_and_unify(filepath, year):
     """Load a single CSV and unify to the standard schema."""
-    # Read CSV with all columns as strings; skip malformed lines
     filepath = Path(filepath)
+    # Count total lines (minus header) to detect skipped bad lines
+    with open(filepath, 'r', errors='replace') as f:
+        total_lines = sum(1 for _ in f) - 1  # subtract header
     df = pd.read_csv(filepath, na_values=NA_VALUES, dtype='string', on_bad_lines='skip')
+    skipped = total_lines - len(df)
+    if skipped > 0:
+        print(f"  WARNING: {filepath.name}: skipped {skipped} malformed rows")
     df.columns = df.columns.str.strip().str.strip('"')
     df['year'] = year
 
