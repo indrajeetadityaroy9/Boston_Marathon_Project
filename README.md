@@ -4,9 +4,11 @@ A multi-scale prediction framework for Boston Marathon finish times, progressive
 
 ## Research Questions
 
-- **RQ1 (Pre-race demographic prediction):** How accurately can finish time be predicted from age, gender, and year alone? Adding a runner's historical mean finish time reduces test RMSE from 2,504s to 1,812s (R² from 0.17 to 0.51).
-- **RQ2 (Pre-race personalized prediction):** For repeat runners, how much does a mixed-effects model improve prediction? In-sample conditional RMSE = 996s; out-of-sample = 1,593s. Honest value of personalization = 651s (~10.8 min).
-- **RQ3 (In-race progressive prediction):** How does prediction improve at each checkpoint? Ridge regression RMSE drops from 1,259s at 5K to 760s at halfway to 124s at 40K. At early checkpoints (5K, 10K), knowing a runner's past race history gives a better prediction than knowing their current split time. But by 15K, the accumulating split data becomes more informative than the runner's historical profile — this is the crossover point.
+- **RQ1 (Pre-race demographic prediction):** How accurately can finish time be predicted from age, gender, and year alone? Demographics explain only 17% of the variation in finish times (test RMSE = 2,504s, roughly 42 minutes of error). However, for runners who have raced Boston before, adding their average prior finish time cuts the error nearly in half (RMSE = 1,812s, R² = 0.51). This shows that a runner's individual history is a far stronger predictor than their demographics.
+
+- **RQ2 (Pre-race personalized prediction):** For repeat runners, how much does building a statistical model of each individual runner improve prediction? A mixed-effects model gives each runner their own baseline ability and aging rate. When evaluated on the same data it was trained on (in-sample), this model predicts within about 17 minutes (RMSE = 996s). When honestly tested on future years it has never seen (out-of-sample), the error rises to about 27 minutes (RMSE = 1,593s). The gap between knowing the runner's history (1,593s) versus not knowing it (2,244s) is about 11 minutes — the concrete value of personalization.
+
+- **RQ3 (In-race progressive prediction):** Once the race starts, how quickly does prediction improve as runners pass each checkpoint? Using Ridge regression on checkpoint split times, the error drops from about 21 minutes at the 5K mark (RMSE = 1,259s) to about 13 minutes at halfway (RMSE = 760s) to just 2 minutes near the finish at 40K (RMSE = 124s). At early checkpoints (5K, 10K), knowing a runner's past race history gives a better prediction than knowing their current split time. But by 15K, the accumulating split data becomes more informative than the runner's historical profile — this is the crossover point.
 
 ## Setup
 
