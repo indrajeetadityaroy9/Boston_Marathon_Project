@@ -66,15 +66,12 @@ def load_data():
 
 
 def evaluate(y_true, y_pred, label):
-    """Compute prediction error metrics: root mean squared error, mean absolute error,
-    R-squared (variance explained), and mean absolute percentage error."""
-    residuals = y_true - y_pred
-    rmse = np.sqrt(np.mean(residuals ** 2))
-    mae = np.mean(np.abs(residuals))
-    ss_res = np.sum(residuals ** 2)
-    ss_tot = np.sum((y_true - y_true.mean()) ** 2)
-    r2 = 1 - ss_res / ss_tot
-    mape = np.mean(np.abs(residuals) / y_true) * 100
+    """RMSE, MAE, R^2, MAPE for a labeled model."""
+    res = y_true - y_pred
+    rmse = np.sqrt(np.mean(res ** 2))
+    mae = np.mean(np.abs(res))
+    r2 = 1 - np.sum(res ** 2) / np.sum((y_true - y_true.mean()) ** 2)
+    mape = np.mean(np.abs(res) / y_true) * 100
     return {'model': label, 'rmse_s': rmse, 'rmse_min': rmse / 60,
             'mae_s': mae, 'mae_min': mae / 60, 'r2': r2, 'mape': mape}
 

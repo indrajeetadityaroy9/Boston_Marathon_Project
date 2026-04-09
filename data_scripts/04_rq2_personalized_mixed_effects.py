@@ -32,6 +32,14 @@ _FIT_KWARGS = dict(method='lbfgs', maxiter=200)
 
 CLEANED_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
 
+# Race-day temperatures (deg F) from Boston Discovery Guide / John Hancock Marathon Weather History
+RACE_DAY_TEMP_F = {
+    2000: 47, 2001: 54, 2002: 56, 2003: 59, 2004: 86, 2005: 66,
+    2006: 53, 2007: 50, 2008: 53, 2009: 47, 2010: 49, 2011: 55,
+    2012: 87, 2013: 54, 2014: 63, 2015: 44, 2016: 61, 2017: 73,
+    2018: 43, 2019: 63,
+}
+
 
 def load_and_filter_data():
     print("\nSTEP 1: REPEAT-RUNNER SAMPLE CONSTRUCTION")
@@ -72,17 +80,14 @@ def load_and_filter_data():
 def compute_icc(df, groups, y):
     print("\nSTEP 3: INTRA-CLASS CORRELATION (ICC = fraction of variance between runners)")
 
-    n_runners = df['display_name'].nunique()
-    n_obs = len(df)
-
-    grp_seconds = df.groupby('display_name')['seconds']
-    runner_means = grp_seconds.transform('mean')
-    grand_mean = y.mean()
-    ms_between = ((runner_means - grand_mean) ** 2).sum() / (n_runners - 1)
-    ms_within = ((y - runner_means.values) ** 2).sum() / (n_obs - n_runners)
-    ni = grp_seconds.size()
-    k0 = (n_obs - (ni ** 2).sum() / n_obs) / (n_runners - 1)
-    icc_anova = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
+    n_r, n_o = df['display_name'].nunique(), len(df)
+    grp_sec = df.groupby('display_name')['seconds']
+    runner_means = grp_sec.transform('mean')
+    ms_b = ((runner_means - y.mean()) ** 2).sum() / (n_r - 1)
+    ms_w = ((y - runner_means.values) ** 2).sum() / (n_o - n_r)
+    ni = grp_sec.size()
+    k0 = (n_o - (ni ** 2).sum() / n_o) / (n_r - 1)
+    icc_anova = (ms_b - ms_w) / (ms_b + (k0 - 1) * ms_w)
     print(f"\n1. ANOVA-based ICC(1): {icc_anova:.4f} ({icc_anova*100:.1f}%)")
 
     exog = sm.add_constant(df[['age_c', 'female', 'year_c']])
@@ -311,42 +316,15 @@ def residual_diagnostics(m2_reml, df):
         print(f"  {decile}: {mr:>8.1f}")
 
 
-def random_effects_summary(m2_reml):
-    """Print random effects correlation and interpretation."""
-    print("\nSTEP 9: RANDOM EFFECTS SUMMARY")
-
-    cov_re = m2_reml.cov_re
-    corr = cov_re.iloc[0, 1] / np.sqrt(cov_re.iloc[0, 0] * cov_re.iloc[1, 1])
-    print(f"\n--- Random Effects Correlation ---")
-    print(f"  corr(intercept, slope) = {corr:.4f}")
-    if corr < 0:
-        print(f"  Interpretation: faster runners (lower intercept) tend to have "
-              f"steeper positive slopes (age more)")
-    else:
-        print(f"  Interpretation: faster runners tend to age more slowly")
-
-
-def export_blups(m2_reml, df):
-    """Export per-runner predicted offsets (random intercepts and slopes) for use by the checkpoint model."""
-    print("\nSTEP 10: EXPORTING PER-RUNNER PREDICTED OFFSETS")
-
-    re_dict = m2_reml.random_effects
-    blup_rows = []
-    for name, effects in re_dict.items():
-        blup_rows.append({
-            'display_name': name,
-            'blup_intercept': effects.iloc[0],
-            'blup_slope': effects.iloc[1],
-        })
-    blup_df = pd.DataFrame(blup_rows)
-
-    output_path = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'runner_blups.csv'
+def export_blups(m2_reml, output_name='runner_blups.csv'):
+    """Export per-runner BLUPs to CSV. Returns the DataFrame."""
+    re_df = pd.DataFrame(m2_reml.random_effects).T
+    blup_df = pd.DataFrame({'display_name': re_df.index,
+                            'blup_intercept': re_df.iloc[:, 0].values,
+                            'blup_slope': re_df.iloc[:, 1].values})
+    output_path = Path(__file__).resolve().parent.parent / 'cleaned_data' / output_name
     blup_df.to_csv(output_path, index=False)
-    print(f"  Exported {len(blup_df):,} runner predicted offsets to {output_path.name}")
-    print(f"  Intercept: mean={blup_df['blup_intercept'].mean():.1f}, "
-          f"std={blup_df['blup_intercept'].std():.1f}")
-    print(f"  Slope: mean={blup_df['blup_slope'].mean():.2f}, "
-          f"std={blup_df['blup_slope'].std():.2f}")
+    return blup_df
 
 
 def prediction_evaluation(m2_reml, df, exog):
@@ -379,6 +357,15 @@ def prediction_evaluation(m2_reml, df, exog):
     print(f"\n  Value of personalization: knowing the runner reduces RMSE by "
           f"{personalization_value:.0f}s ({personalization_value/60:.1f} min)")
     print(f"  This is the improvement personalization provides over the demographic baseline.")
+
+    # 90% prediction intervals
+    sigma2 = m2_reml.scale
+    tau2_0 = m2_reml.cov_re.iloc[0, 0]
+    pi_known = 2 * 1.645 * np.sqrt(sigma2)
+    pi_new = 2 * 1.645 * np.sqrt(tau2_0 + sigma2)
+    print(f"\n  90% Prediction Interval Widths:")
+    print(f"    Known runner: +/-{pi_known/2:.0f}s = {pi_known:.0f}s wide ({pi_known/60:.0f} min)")
+    print(f"    New runner (at mean age): +/-{pi_new/2:.0f}s = {pi_new:.0f}s wide ({pi_new/60:.0f} min)")
 
 
 def temporal_holdout_evaluation(df_full):
@@ -454,17 +441,170 @@ def temporal_holdout_evaluation(df_full):
     print(f"  {'Value of personalization (s)':<30} {personalization_oos:>12.1f} {'--':>12}")
 
     # Export leak-free predicted offsets (estimated from training years only)
-    blup_rows = []
-    for name, effects in re_dict.items():
-        blup_rows.append({
-            'display_name': name,
-            'blup_intercept': effects.iloc[0],
-            'blup_slope': effects.iloc[1],
-        })
-    blup_df = pd.DataFrame(blup_rows)
-    output_path = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'runner_blups_leakfree.csv'
-    blup_df.to_csv(output_path, index=False)
-    print(f"\n  Exported {len(blup_df):,} leak-free predicted offsets (2000-2016) to {output_path.name}")
+    blup_lf = export_blups(m2_holdout, 'runner_blups_leakfree.csv')
+    print(f"\n  Exported {len(blup_lf):,} leak-free predicted offsets (2000-2016) to runner_blups_leakfree.csv")
+
+
+def weather_augmented_model(df, y, groups):
+    """Step 13: Refit M2.2 with race-day temperature as a fixed-effect covariate."""
+    print("\nSTEP 13: WEATHER-AUGMENTED MODEL")
+
+    # Convert to Celsius and center
+    df = df.copy()
+    df['temp_c_raw'] = df['year'].map(RACE_DAY_TEMP_F)
+    df['temp_c'] = (df['temp_c_raw'] - 32) * 5 / 9  # to Celsius
+    temp_mean = df['temp_c'].mean()
+    df['temp_c'] = df['temp_c'] - temp_mean
+    print(f"  Temperature centered at {temp_mean + (df['temp_c'].mean()):.1f}deg C (mean across runner-years)")
+
+    exog_weather = sm.add_constant(df[['age_c', 'female', 'year_c', 'temp_c']])
+    exog_re_weather = sm.add_constant(df[['age_c']])
+
+    print("  Fitting M2.2 with temperature covariate...")
+    m2_weather = MixedLM(y, exog_weather, groups=groups,
+                         exog_re=exog_re_weather).fit(reml=True, **_FIT_KWARGS)
+    print(f"  Converged: {m2_weather.converged}")
+
+    # Report temperature coefficient
+    temp_coef = m2_weather.fe_params['temp_c']
+    temp_se = m2_weather.bse_fe['temp_c']
+    temp_p = m2_weather.pvalues['temp_c']
+    print(f"\n  Temperature coefficient: {temp_coef:.1f} sec/deg C (SE={temp_se:.1f}, p={temp_p:.2e})")
+    print(f"  Interpretation: each 1deg C warmer -> {temp_coef:.0f}s slower finish time")
+
+    # Compare year-level residuals before/after
+    resid_weather = m2_weather.resid
+    df_r = df[['year']].copy()
+    df_r['resid'] = resid_weather
+    year_means = df_r.groupby('year')['resid'].mean()
+    flagged = int((year_means.abs() > 100).sum())
+    print(f"\n  Year-level residuals (with temperature):")
+    print(f"  Flagged years (|mean resid| > 100s): {flagged}/20")
+    print(f"  Year-level residual std: {year_means.std():.1f}s")
+
+    # Conditional RMSE comparison
+    cond_rmse = np.sqrt(np.mean(resid_weather ** 2))
+    print(f"  Conditional RMSE (with temp): {cond_rmse:.1f}s")
+
+
+def log_transform_sensitivity(df, y, groups):
+    """Step 14: Fit M2.2 on log(seconds) to assess sensitivity to non-normality."""
+    print("\nSTEP 14: LOG-TRANSFORM SENSITIVITY ANALYSIS")
+
+    log_y = np.log(y)
+    exog = sm.add_constant(df[['age_c', 'female', 'year_c']])
+    exog_re = sm.add_constant(df[['age_c']])
+
+    print("  Fitting M2.2 on log(seconds)...")
+    m2_log = MixedLM(log_y, exog, groups=groups, exog_re=exog_re).fit(reml=True, **_FIT_KWARGS)
+    print(f"  Converged: {m2_log.converged}")
+
+    # Residual diagnostics comparison
+    log_resid = m2_log.resid
+    print(f"\n  Log-scale residual diagnostics:")
+    print(f"  Skewness: {stats.skew(log_resid):.4f} (raw-scale: 1.1346)")
+    print(f"  Kurtosis: {stats.kurtosis(log_resid):.4f} (raw-scale: 4.5927)")
+
+    # Back-transform via Duan smearing
+    smearing_factor = np.mean(np.exp(log_resid))
+    log_cond_pred = log_y - log_resid
+    cond_pred_bt = np.exp(log_cond_pred) * smearing_factor
+    rmse_bt = np.sqrt(np.mean((y - cond_pred_bt) ** 2))
+    print(f"\n  Back-transformed conditional RMSE: {rmse_bt:.1f}s (raw-scale: 996.2s)")
+    print(f"  Duan smearing factor: {smearing_factor:.4f}")
+
+    # Fixed-effect comparison
+    print(f"\n  Fixed-effect comparison (log vs raw scale):")
+    print(f"  {'Variable':>10} {'Raw':>12} {'Log':>12} {'Same sign':>10}")
+    raw_params = {'const': 13225.17, 'age_c': 75.57, 'female': 1484.50, 'year_c': 2.75}
+    for var in ['const', 'age_c', 'female', 'year_c']:
+        raw_val = raw_params[var]
+        log_val = m2_log.fe_params[var]
+        same = 'yes' if np.sign(raw_val) == np.sign(log_val) else 'NO'
+        print(f"  {var:>10} {raw_val:>12.2f} {log_val:>12.6f} {same:>10}")
+
+
+def spline_age_comparison(df, y, groups):
+    """Step 15: Compare quadratic age vs penalized B-spline in the fixed effects."""
+    print("\nSTEP 15: PENALIZED SPLINE AGE COMPARISON")
+
+    from patsy import dmatrix
+
+    # Generate B-spline basis (df=5)
+    spline_basis = dmatrix("bs(age_c, df=5, include_intercept=False) - 1",
+                           data=df, return_type='dataframe')
+    spline_basis.columns = [f'age_spline_{i}' for i in range(spline_basis.shape[1])]
+    print(f"  B-spline basis: {spline_basis.shape[1]} columns (df=5)")
+
+    # Build spline exog: const + spline columns + female + year_c
+    exog_spline = sm.add_constant(
+        pd.concat([spline_basis, df[['female', 'year_c']].reset_index(drop=True)], axis=1))
+    exog_re = sm.add_constant(df[['age_c']])
+
+    print("  Fitting M2.2 with spline age (REML)...")
+    m2_spline_reml = MixedLM(y, exog_spline, groups=groups,
+                              exog_re=exog_re).fit(reml=True, **_FIT_KWARGS)
+    print(f"  Converged: {m2_spline_reml.converged}")
+
+    print("  Fitting M2.2 with spline age (ML for AIC/BIC)...")
+    m2_spline_ml = MixedLM(y, exog_spline, groups=groups,
+                            exog_re=exog_re).fit(reml=False,
+                                                  start_params=m2_spline_reml.params,
+                                                  **_FIT_KWARGS)
+
+    # Compare with quadratic (refit ML for fair comparison)
+    exog_quad = sm.add_constant(df[['age_c', 'female', 'year_c']])
+    exog_quad.insert(2, 'age_c2', df['age_c'] ** 2)
+    m2_quad_ml = MixedLM(y, exog_quad, groups=groups,
+                          exog_re=exog_re).fit(reml=False, **_FIT_KWARGS)
+
+    print(f"\n  --- Quadratic vs Spline (ML) ---")
+    print(f"  {'Model':<12} {'k':>4} {'AIC':>14} {'BIC':>14} {'Cond RMSE':>12}")
+    quad_rmse = np.sqrt(np.mean(m2_quad_ml.resid ** 2))
+    spline_rmse = np.sqrt(np.mean(m2_spline_ml.resid ** 2))
+    # Quadratic: const + age_c + age_c2 + female + year_c = 5 FE + 3 RE params = 8
+    # Spline: const + 5 spline + female + year_c = 8 FE + 3 RE params = 11
+    print(f"  {'Quadratic':<12} {8:>4} {m2_quad_ml.aic:>14.1f} {m2_quad_ml.bic:>14.1f} {quad_rmse:>12.1f}")
+    print(f"  {'Spline(5)':<12} {11:>4} {m2_spline_ml.aic:>14.1f} {m2_spline_ml.bic:>14.1f} {spline_rmse:>12.1f}")
+    print(f"  dAIC: {m2_spline_ml.aic - m2_quad_ml.aic:+.1f}, dBIC: {m2_spline_ml.bic - m2_quad_ml.bic:+.1f}")
+
+
+def survival_bias_check(df):
+    """Step 16: Compare aging slopes for still-active vs dropped-out runners."""
+    print("\nSTEP 16: SURVIVAL BIAS SENSITIVITY CHECK")
+
+    runner_stats = df.groupby('display_name').agg(
+        n_races=('year', 'count'),
+        age_span=('age', lambda s: s.max() - s.min()),
+        last_year=('year', 'max'),
+    )
+    eligible = runner_stats[(runner_stats['n_races'] > 1) & (runner_stats['age_span'] >= 5)]
+
+    active = eligible[eligible['last_year'] >= 2017]
+    dropped = eligible[eligible['last_year'] < 2015]
+
+    def group_slopes(names):
+        sub = df[df['display_name'].isin(names)]
+        grp = sub.groupby('display_name')
+        age_mean = grp['age'].transform('mean')
+        sec_mean = grp['seconds'].transform('mean')
+        dx = sub['age'] - age_mean
+        dy = sub['seconds'] - sec_mean
+        return (dx * dy).groupby(sub['display_name']).sum() / (dx ** 2).groupby(sub['display_name']).sum()
+
+    slopes_active = group_slopes(active.index)
+    slopes_dropped = group_slopes(dropped.index)
+
+    print(f"\n  Still-active (last year >= 2017): n={len(active):,}")
+    print(f"    Mean slope: {slopes_active.mean():.1f} sec/yr (std={slopes_active.std():.1f})")
+    print(f"  Dropped-out (last year < 2015):  n={len(dropped):,}")
+    print(f"    Mean slope: {slopes_dropped.mean():.1f} sec/yr (std={slopes_dropped.std():.1f})")
+    diff = slopes_active.mean() - slopes_dropped.mean()
+    print(f"  Difference: {diff:.1f} sec/yr ({abs(diff)/slopes_active.mean()*100:.1f}% of active mean)")
+    if abs(diff) < 5:
+        print(f"  -> Survival bias is negligible ({abs(diff):.1f} sec/yr)")
+    else:
+        print(f"  -> Survival bias detected ({abs(diff):.1f} sec/yr)")
 
 
 def main():
@@ -499,10 +639,30 @@ def main():
     model_selection(m0, m1_ml, m2_ml)
     variance_decomposition(m2_reml, df, exog)
     residual_diagnostics(m2_reml, df)
-    random_effects_summary(m2_reml)
-    export_blups(m2_reml, df)
+
+    # Step 9: Random effects correlation (inlined -- too small for its own function)
+    print("\nSTEP 9: RANDOM EFFECTS SUMMARY")
+    cov_re = m2_reml.cov_re
+    corr_re = cov_re.iloc[0, 1] / np.sqrt(cov_re.iloc[0, 0] * cov_re.iloc[1, 1])
+    print(f"\n--- Random Effects Correlation ---")
+    print(f"  corr(intercept, slope) = {corr_re:.4f}")
+    print(f"  Interpretation: {'faster runners tend to age faster (steeper positive slopes)' if corr_re < 0 else 'faster runners tend to age more slowly'}")
+
+    # Step 10: Export BLUPs
+    print("\nSTEP 10: EXPORTING PER-RUNNER PREDICTED OFFSETS")
+    blup_df = export_blups(m2_reml)
+    print(f"  Exported {len(blup_df):,} runner predicted offsets to runner_blups.csv")
+    print(f"  Intercept: mean={blup_df['blup_intercept'].mean():.1f}, std={blup_df['blup_intercept'].std():.1f}")
+    print(f"  Slope: mean={blup_df['blup_slope'].mean():.2f}, std={blup_df['blup_slope'].std():.2f}")
+
     prediction_evaluation(m2_reml, df, exog)
     temporal_holdout_evaluation(df)
+
+    # Sensitivity analyses and extensions (Steps 13-16)
+    weather_augmented_model(df, y, groups)
+    log_transform_sensitivity(df, y, groups)
+    spline_age_comparison(df, y, groups)
+    survival_bias_check(df)
 
     print(f"\nTotal runtime: {time.time() - t0:.0f}s ({(time.time() - t0)/60:.1f} min)")
 

@@ -36,8 +36,9 @@ NEEDED_COLS = ['year', 'display_name', 'age', 'gender', 'seconds'] + SPLIT_COLS
 CHECKPOINT_KM = [5.0, 10.0, 15.0, 20.0, 21.0975, 25.0, 30.0, 35.0, 40.0]
 
 MARATHON_KM = 42.195
+CP_ORDER = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
 
-# Model label constants (used as dict keys and display labels)
+# Model label constants
 NAIVE = 'Naive (constant pace)'
 SPLITS = 'Ridge (splits only)'
 DEMO = 'Ridge (splits + demographics)'
@@ -115,8 +116,13 @@ def run_progressive_prediction(train, test):
         m = Ridge(alpha=1.0).fit(train[cumul_splits].values, y_train)
         pred = m.predict(test[cumul_splits].values)
         rmse_s, mae_s, r2_s = evaluate(y_test, pred)
+        # 90% prediction interval width from training residuals (percentile-based)
+        train_pred = m.predict(train[cumul_splits].values)
+        train_resid = y_train - train_pred
+        pi_width = np.percentile(train_resid, 95) - np.percentile(train_resid, 5)
         results.append({'checkpoint': cp_label, 'km': km, 'model': SPLITS,
-                        'rmse': rmse_s, 'mae': mae_s, 'r2': r2_s, 'n_test': len(test)})
+                        'rmse': rmse_s, 'mae': mae_s, 'r2': r2_s, 'n_test': len(test),
+                        'pi_width': pi_width})
 
         # Splits + demographics: add age and gender to the split features
         # (year is excluded because test year extrapolation degrades predictions)
@@ -170,7 +176,7 @@ def run_progressive_prediction(train, test):
 
 def print_convergence_table(results_df):
     """Print the prediction convergence curve as a table."""
-    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+    cp_order = CP_ORDER
 
     # Core models on full test set
     print("\n--- Prediction Convergence (test set 2017, all runners) ---")
@@ -205,7 +211,7 @@ def print_convergence_table(results_df):
 def print_r2_convergence(results_df):
     """Print R-squared convergence for all models."""
     print("\n--- R-squared Convergence ---")
-    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+    cp_order = CP_ORDER
 
     main = results_df[results_df['model'].isin([NAIVE, SPLITS, DEMO])]
     pivot = main.pivot(index='checkpoint', columns='model', values='r2').reindex(cp_order)
@@ -238,10 +244,24 @@ def feature_importance_at_checkpoints(train):
             print(f"    {feat:>15}: {coef:>10.1f}")
 
 
+def print_pi_convergence(results_df):
+    """Print 90% prediction interval width convergence for splits-only Ridge."""
+    print("\n--- 90% Prediction Interval Width Convergence (splits-only Ridge) ---")
+    cp_order = CP_ORDER
+    splits_df = results_df[results_df['model'] == SPLITS].set_index('checkpoint')
+
+    print(f"\n{'Checkpoint':>12} {'RMSE (s)':>10} {'90% PI (s)':>12} {'90% PI (min)':>13}")
+    print("-" * 50)
+    for cp in cp_order:
+        rmse = splits_df.loc[cp, 'rmse']
+        pi = splits_df.loc[cp, 'pi_width']
+        print(f"  {cp:>10} {rmse:>8.0f} {pi:>10.0f} {pi/60:>11.1f}")
+
+
 def cumulative_vs_single_analysis(results_df):
     """Compare cumulative-splits Ridge vs single-checkpoint Ridge at each checkpoint."""
     print("\nSTEP 4b: CUMULATIVE vs SINGLE-CHECKPOINT COMPARISON")
-    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+    cp_order = CP_ORDER
 
     cumul = results_df[results_df['model'] == SPLITS].set_index('checkpoint')
     single = results_df[results_df['model'] == SINGLE].set_index('checkpoint')
@@ -264,7 +284,7 @@ def cumulative_vs_single_analysis(results_df):
 def year_degradation_analysis(results_df):
     """Compare demo (no year) vs demo+year to quantify year-coefficient degradation."""
     print("\nSTEP 4c: YEAR-COEFFICIENT DEGRADATION")
-    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+    cp_order = CP_ORDER
 
     demo = results_df[results_df['model'] == DEMO].set_index('checkpoint')
     demo_year = results_df[results_df['model'] == DEMO_YEAR].set_index('checkpoint')
@@ -319,16 +339,12 @@ def main():
     crossover_analysis(results_df)
     cumulative_vs_single_analysis(results_df)
     year_degradation_analysis(results_df)
+    print_pi_convergence(results_df)
 
     print("\n" + "=" * 70)
-    best_5k = results_df[(results_df['checkpoint'] == '5K') &
-                          (results_df['model'] == SPLITS)]['rmse'].values[0]
-    best_half = results_df[(results_df['checkpoint'] == 'HALF') &
-                            (results_df['model'] == SPLITS)]['rmse'].values[0]
-    best_40k = results_df[(results_df['checkpoint'] == '40K') &
-                           (results_df['model'] == SPLITS)]['rmse'].values[0]
-    print(f"Prediction improves from RMSE={best_5k:.0f}s at 5K "
-          f"to {best_half:.0f}s at halfway to {best_40k:.0f}s at 40K")
+    splits_idx = results_df[results_df['model'] == SPLITS].set_index('checkpoint')['rmse']
+    print(f"Prediction improves from RMSE={splits_idx['5K']:.0f}s at 5K "
+          f"to {splits_idx['HALF']:.0f}s at halfway to {splits_idx['40K']:.0f}s at 40K")
 
 
 if __name__ == '__main__':

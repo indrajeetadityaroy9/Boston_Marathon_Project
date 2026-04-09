@@ -4,14 +4,7 @@ import numpy as np
 import pandas as pd
 import scikit_posthocs as sp
 import statsmodels.formula.api as smf
-from scipy.stats import (
-    kruskal,
-    mannwhitneyu,
-    pearsonr,
-    shapiro,
-    spearmanr,
-    ttest_ind,
-)
+from scipy.stats import kruskal, mannwhitneyu, pearsonr, shapiro, spearmanr, ttest_ind
 from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.meta_analysis import effectsize_smd
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
@@ -133,10 +126,8 @@ def main():
     # Hedges' g quantifies how large the gender gap is in standard deviation units.
     # With n=600k, even tiny differences are statistically significant, so effect size
     # tells us whether the difference is practically meaningful.
-    g, _ = effectsize_smd(
-        m_sec.mean(), m_sec.std(ddof=1), m_sec.count(),
-        f_sec.mean(), f_sec.std(ddof=1), f_sec.count(),
-    )
+    g, _ = effectsize_smd(m_sec.mean(), m_sec.std(ddof=1), m_sec.count(),
+                          f_sec.mean(), f_sec.std(ddof=1), f_sec.count())
     abs_g = abs(g)
     print(f"Hedges' g (M-F): {g:.4f} ({'small' if abs_g < 0.5 else 'medium' if abs_g < 0.8 else 'large'} effect; "
           f"negative = males faster)")
@@ -147,14 +138,10 @@ def main():
         m_d = df[(df['decade'] == decade) & (df['gender'] == 'M')]['seconds']
         f_d = df[(df['decade'] == decade) & (df['gender'] == 'F')]['seconds']
         mwu_d = mannwhitneyu(m_d, f_d, alternative='two-sided')
-        g_d, _ = effectsize_smd(
-            m_d.mean(), m_d.std(ddof=1), m_d.count(),
-            f_d.mean(), f_d.std(ddof=1), f_d.count(),
-        )
-        gd_rows.append({
-            'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d),
-            'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d,
-        })
+        g_d, _ = effectsize_smd(m_d.mean(), m_d.std(ddof=1), m_d.count(),
+                                f_d.mean(), f_d.std(ddof=1), f_d.count())
+        gd_rows.append({'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d),
+                        'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d})
     print("\nGender Gap by Decade:")
     print(pd.DataFrame(gd_rows).set_index('decade').to_string())
 
@@ -231,31 +218,25 @@ def main():
 
     # Overall pacing distribution across all years
     overall_pacing = splits['pacing_type'].value_counts(normalize=True).sort_index() * 100
-    print(f"\nOverall Pacing Distribution:")
-    for ptype, pct in overall_pacing.items():
-        print(f"  {ptype}: {pct:.1f}%")
+    print("\nOverall Pacing Distribution:")
+    for ptype, pct in overall_pacing.items(): print(f"  {ptype}: {pct:.1f}%")
 
-    # Kruskal-Wallis test: do pacing groups have different finish times?
-    kw_pace = kruskal(*[g['seconds'].values
-                        for _, g in splits.groupby('pacing_type', observed=True)])
+    # Kruskal-Wallis: do pacing groups have different finish times?
+    kw_pace = kruskal(*[g['seconds'].values for _, g in splits.groupby('pacing_type', observed=True)])
     print(f"\nKruskal-Wallis (pacing): H={kw_pace.statistic:.2f}, p={kw_pace.pvalue:.2e}")
 
-    # Eta-squared effect size for pacing groups (overall)
-    grand_mean_pace = splits['seconds'].mean()
-    pace_group_means = splits.groupby('pacing_type', observed=True)['seconds'].transform('mean')
-    ss_between_pace = ((pace_group_means - grand_mean_pace) ** 2).sum()
-    ss_total_pace = ((splits['seconds'] - grand_mean_pace) ** 2).sum()
-    eta_sq_pace = ss_between_pace / ss_total_pace
+    # Eta-squared effect size for pacing groups
+    gm_pace = splits['seconds'].mean()
+    pm_pace = splits.groupby('pacing_type', observed=True)['seconds'].transform('mean')
+    eta_sq_pace = ((pm_pace - gm_pace) ** 2).sum() / ((splits['seconds'] - gm_pace) ** 2).sum()
     print(f"Eta-squared (pacing): {eta_sq_pace:.4f} ({eta_sq_pace*100:.1f}% of variance)")
 
-    # Per-year eta-squared to verify "within-year effect sizes range from η²=0.006 to 0.025"
-    print(f"\nPer-Year Eta-squared (pacing):")
+    # Per-year eta-squared
+    print("\nPer-Year Eta-squared (pacing):")
     for yr, yr_df in splits.groupby('year'):
         gm = yr_df['seconds'].mean()
         pm = yr_df.groupby('pacing_type', observed=True)['seconds'].transform('mean')
-        ss_b = ((pm - gm) ** 2).sum()
-        ss_t = ((yr_df['seconds'] - gm) ** 2).sum()
-        print(f"  {yr}: eta_sq={ss_b / ss_t:.4f}")
+        print(f"  {yr}: eta_sq={((pm - gm)**2).sum() / ((yr_df['seconds'] - gm)**2).sum():.4f}")
 
     # Dunn's post-hoc (same pattern as Section 5 age group analysis)
     print("\nDunn's Post-hoc Pacing (Bonferroni):")
@@ -319,15 +300,13 @@ def main():
     # A high ICC means runners have consistent ability levels across years, which
     # justifies adding per-runner random intercepts to the mixed-effects model.
     runner_means = repeat_df.groupby('display_name')['seconds'].transform('mean')
-    ss_between = ((runner_means - repeat_df['seconds'].mean()) ** 2).sum()
-    ss_within = ((repeat_df['seconds'] - runner_means) ** 2).sum()
-    n_runners = repeat_df['display_name'].nunique()
-    n_obs = len(repeat_df)
-    ms_between = ss_between / (n_runners - 1)
-    ms_within = ss_within / (n_obs - n_runners)
+    grand_mean = repeat_df['seconds'].mean()
+    n_r, n_o = repeat_df['display_name'].nunique(), len(repeat_df)
+    ms_b = ((runner_means - grand_mean) ** 2).sum() / (n_r - 1)
+    ms_w = ((repeat_df['seconds'] - runner_means) ** 2).sum() / (n_o - n_r)
     ni = repeat_df.groupby('display_name').size()
-    k0 = (n_obs - (ni ** 2).sum() / n_obs) / (n_runners - 1)
-    icc = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
+    k0 = (n_o - (ni ** 2).sum() / n_o) / (n_r - 1)
+    icc = (ms_b - ms_w) / (ms_b + (k0 - 1) * ms_w)
 
     print(f"\nIntra-class correlation (ICC): {icc:.4f} -- {icc*100:.1f}% of finish time variance is between runners")
     print(f"  -> {'strong' if icc > 0.3 else 'moderate' if icc > 0.1 else 'weak'} justification for per-runner random intercepts")

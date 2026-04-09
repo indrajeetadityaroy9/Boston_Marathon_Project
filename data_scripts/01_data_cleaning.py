@@ -108,29 +108,15 @@ def impute_age(df, *, n_neighbors=5, min_validity=0.50):
     sub_valid = sub.loc[valid_for_impute, feature_cols].copy()
     was_null = sub_valid['age'].isna()
 
-    preprocess = ColumnTransformer(
-        transformers=[
-            ('age', 'passthrough', ['age']),
-            ('numeric_context', StandardScaler(), ['year', 'seconds']),
-            (
-                'gender',
-                OrdinalEncoder(
-                    categories=[['M', 'F']],
-                    dtype=float,
-                    handle_unknown='use_encoded_value',
-                    unknown_value=np.nan,
-                ),
-                ['gender'],
-            ),
-        ],
-        verbose_feature_names_out=False,
-    ).set_output(transform='pandas')
-    pipe = Pipeline([
-        ('preprocess', preprocess),
-        ('imputer', KNNImputer(n_neighbors=n_neighbors)),
-    ]).set_output(transform='pandas')
-    imputed_frame = pipe.fit_transform(sub_valid)
-    imputed_series = imputed_frame['age']
+    preprocess = ColumnTransformer(transformers=[
+        ('age', 'passthrough', ['age']),
+        ('num', StandardScaler(), ['year', 'seconds']),
+        ('gender', OrdinalEncoder(categories=[['M', 'F']], dtype=float,
+                                  handle_unknown='use_encoded_value', unknown_value=np.nan), ['gender']),
+    ], verbose_feature_names_out=False).set_output(transform='pandas')
+    pipe = Pipeline([('pre', preprocess), ('imp', KNNImputer(n_neighbors=n_neighbors))
+                     ]).set_output(transform='pandas')
+    imputed_series = pipe.fit_transform(sub_valid)['age']
 
     imputed_indices = was_null[was_null].index
     df.loc[imputed_indices, 'age'] = imputed_series.loc[imputed_indices].round().astype(int)
