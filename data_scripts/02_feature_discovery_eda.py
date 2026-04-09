@@ -30,9 +30,9 @@ def main():
     df['decade'] = (df['year'] // 10) * 10
 
     # --- SECTION 1: DESCRIPTIVE STATISTICS ---
-    # [Feature discovery for RQ1] Summarize center, spread, and shape of the target variable.
-    # Skewness and kurtosis inform whether parametric models (OLS) or non-parametric
-    # approaches are appropriate for the prediction baseline.
+    # Summarize center, spread, and shape of the finish time distribution.
+    # Skewness and kurtosis inform whether standard regression or non-parametric
+    # approaches are appropriate for the demographic baseline prediction.
     print("\nSECTION 1: DESCRIPTIVE STATISTICS")
 
     print("\nOverall:")
@@ -49,9 +49,9 @@ def main():
     print(df.groupby('decade')['seconds'].describe().to_string())
 
     # --- SECTION 2: NORMALITY TESTS ---
-    # [Feature discovery for RQ1] Check distributional assumptions for prediction models.
-    # Log-transform may improve residual behavior in mixed-effects models (RQ2).
-    # 5000-row subsample avoids trivial rejection at n=600k.
+    # Check whether finish times follow a normal distribution (assumption for t-tests, ANOVA).
+    # Log-transform may improve residual behavior in the mixed-effects personalization model.
+    # 5000-row subsample avoids trivially rejecting normality due to large sample size.
     print("\nSECTION 2: NORMALITY TESTS")
 
     strata = {
@@ -83,9 +83,9 @@ def main():
     print(f"  Log:  skewness={log_secs.skew():.4f}, kurtosis={log_secs.kurtosis():.4f}")
 
     # --- SECTION 3: CORRELATION ANALYSIS ---
-    # [Feature discovery for RQ1] Quantifies age-time and gender-time relationships
-    # to justify including age, age^2, and gender as predictors in the baseline model.
-    # Excludes KNN-imputed ages to avoid artificial correlation.
+    # Measures how strongly age correlates with finish time, both linearly (Pearson)
+    # and monotonically (Spearman). Partial correlation controls for gender.
+    # Excludes KNN-imputed ages to avoid artificial correlation from the imputation model.
     print("\nSECTION 3: CORRELATION ANALYSIS")
 
     valid_age = df[df['age'].notna() & ~df['age_imputed']].copy()
@@ -112,8 +112,9 @@ def main():
     print(f"  Partial r (age | gender): {partial_r:.4f}, p={partial_model.pvalues['age']:.2e}")
 
     # --- SECTION 4: GENDER COMPARISON ---
-    # [Feature discovery for RQ1] Tests and quantifies the gender effect on finish time.
-    # Hedges' g provides the effect size that contextualizes gender as a predictor.
+    # Tests whether male and female finish times differ significantly, and measures
+    # how large the difference is using Hedges' g (standardized mean difference).
+    # Effect size distinguishes meaningful differences from large-sample artifacts.
     print("\nSECTION 4: GENDER COMPARISON")
 
     m_sec = df[df['gender'] == 'M']['seconds'].dropna()
@@ -161,9 +162,10 @@ def main():
     print(pd.DataFrame(gd_rows).set_index('decade').to_string())
 
     # --- SECTION 5: AGE GROUP ANALYSIS ---
-    # [Feature discovery for RQ1] Tests age-group effects and quantifies explained variance
-    # (eta-squared). The nonlinear age pattern (30-39 fastest, monotonic increase after)
-    # motivates the quadratic age term in the RQ1 and RQ2 prediction models.
+    # Tests whether finish times differ across six age brackets and measures how much
+    # variance age group explains (eta-squared = proportion of total variance).
+    # The nonlinear pattern (30-39 fastest, monotonic slowing after) motivates using
+    # a quadratic age term in the prediction models.
     print("\nSECTION 5: AGE GROUP ANALYSIS")
 
     aged = df[df['age'].between(14, 90) & ~df['age_imputed']].copy()
@@ -204,9 +206,10 @@ def main():
     print(tukey.summary())
 
     # --- SECTION 6: SPLIT-TIME ANALYSIS (2015-2017) ---
-    # [Feature exploration for RQ3] Checkpoint-to-finish correlations quantify how
-    # predictive each split is for finish time. High inter-split correlations (r > 0.99)
-    # motivate Ridge regression over OLS in the progressive prediction model.
+    # Checkpoint split times (5K through 40K) are only available for 2015-2017.
+    # The correlation matrix shows how strongly each checkpoint predicts finish time.
+    # Very high correlations between adjacent checkpoints (r > 0.99) mean Ridge
+    # regression is needed instead of ordinary least squares for in-race prediction.
     print("\nSECTION 6: SPLIT-TIME ANALYSIS (2015-2017)")
 
     splits = df[df['year'].between(2015, 2017)].copy()
@@ -231,9 +234,11 @@ def main():
     print((pd.crosstab(splits['year'], splits['pacing_type'], normalize='index') * 100).to_string())
 
     # --- SECTION 7: REPEAT RUNNER PROFILING ---
-    # [Justification for RQ2] Quantifies repeat-runner structure: ICC justifies random
-    # intercepts, slope variance justifies random slopes. These motivate the mixed-effects
-    # personalization model that produces BLUPs for individual prediction.
+    # About half the dataset consists of runners who appear in multiple years.
+    # The intra-class correlation (ICC) measures how much of the total variance in
+    # finish time comes from stable between-runner differences vs race-to-race noise.
+    # High ICC justifies per-runner baselines; high slope variance justifies per-runner
+    # aging rates in the mixed-effects personalization model.
     print("\nSECTION 7: REPEAT RUNNER PROFILING")
 
     name_counts = df['display_name'].value_counts()
@@ -297,8 +302,8 @@ def main():
     k0 = (n_obs - (ni ** 2).sum() / n_obs) / (n_runners - 1)
     icc = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
 
-    print(f"\nICC(1): {icc:.4f} -- {icc*100:.1f}% of variance is between runners")
-    print(f"  -> {'strong' if icc > 0.3 else 'moderate' if icc > 0.1 else 'weak'} justification for random intercepts")
+    print(f"\nIntra-class correlation (ICC): {icc:.4f} -- {icc*100:.1f}% of finish time variance is between runners")
+    print(f"  -> {'strong' if icc > 0.3 else 'moderate' if icc > 0.1 else 'weak'} justification for per-runner random intercepts")
 
     # Per-runner OLS slopes measure how each individual's finish time changes with age.
     # If all runners aged the same way, one fixed slope would suffice. High variance
@@ -320,7 +325,7 @@ def main():
     print(f"  Mean: {runner_slopes.mean():.1f} sec/yr, Median: {runner_slopes.median():.1f} sec/yr, Std: {runner_slopes.std():.1f} sec/yr")
     print(f"  Slowing: {(runner_slopes > 0).sum()} ({(runner_slopes > 0).sum()/len(runner_slopes)*100:.1f}%), "
           f"Improving: {(runner_slopes < 0).sum()} ({(runner_slopes < 0).sum()/len(runner_slopes)*100:.1f}%)")
-    print(f"  -> high slope variance justifies random slopes on age")
+    print(f"  -> high variance in aging rates justifies per-runner random slopes on age")
 
 
 if __name__ == '__main__':

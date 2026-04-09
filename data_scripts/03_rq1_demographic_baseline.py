@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""RQ1: Demographic Baseline Prediction.
+"""Pre-Race Demographic Baseline Prediction (Research Question 1).
 
 Predicts marathon finish time from pre-race demographics alone (age, gender, year).
-Establishes the baseline RMSE that personalized (RQ2) and in-race (RQ3) models must beat.
+Establishes the baseline prediction error that the personalized (mixed-effects)
+and in-race (checkpoint) models must beat.
 
 Models:
-  M1.0  OLS: seconds ~ age_c + female + year_c
-  M1.1  OLS: seconds ~ age_c + age_c^2 + female + year_c + age_c:female
+  Linear OLS:     finish_time ~ centered_age + female + centered_year
+  Quadratic OLS:  finish_time ~ centered_age + centered_age^2 + female + centered_year
+                  + centered_age * female interaction
+  History OLS:    Above + prior_appearances + prior_mean_time (repeat runners only)
 
-Evaluation: temporal hold-out (train 2000-2017, test 2018-2019).
+Evaluation: temporal hold-out (train on 2000-2017, test on 2018-2019).
 """
 
 from pathlib import Path
@@ -30,12 +33,17 @@ def load_data():
     print("STEP 1: DATA LOADING")
 
     df = pd.read_csv(CLEANED_PATH, low_memory=False,
-                     usecols=['year', 'age', 'gender', 'seconds', 'age_imputed'],
-                     dtype={'gender': 'category'})
-    df['age_imputed'] = df['age_imputed'].astype(str).str.strip().str.lower() == 'true'
+                     usecols=['year', 'display_name', 'age', 'gender', 'seconds', 'age_imputed'],
+                     dtype={'gender': 'category', 'display_name': str})
     df = df[~df['age_imputed'] & df['age'].notna() & (df['year'] >= 2000)].copy()
     df = df.dropna(subset=['seconds'])
     print(f"  Non-imputed, age-valid, 2000+: {len(df):,} rows")
+
+    # Compute prior race history (leak-free: uses only prior years via shift)
+    df.sort_values(['display_name', 'year'], inplace=True)
+    df['prior_mean_time'] = df.groupby('display_name')['seconds'].transform(
+        lambda x: x.expanding().mean().shift(1))
+    df['prior_appearances'] = df.groupby('display_name').cumcount()
 
     train = df[df['year'].isin(TRAIN_YEARS)].copy()
     test = df[df['year'].isin(TEST_YEARS)].copy()
@@ -49,15 +57,18 @@ def load_data():
         d['female'] = (d['gender'] == 'F').astype(int)
         d['age_c_female'] = d['age_c'] * d['female']
 
+    n_hist_train = train['prior_mean_time'].notna().sum()
+    n_hist_test = test['prior_mean_time'].notna().sum()
     print(f"  Age centered at {age_mean:.1f} (train mean)")
-    print(f"  Train (2000-2017): {len(train):,} rows")
-    print(f"  Test  (2018-2019): {len(test):,} rows")
+    print(f"  Train (2000-2017): {len(train):,} rows ({n_hist_train:,} with prior history)")
+    print(f"  Test  (2018-2019): {len(test):,} rows ({n_hist_test:,} with prior history)")
 
     return train, test
 
 
 def evaluate(y_true, y_pred, label):
-    """Compute RMSE, MAE, R^2, MAPE."""
+    """Compute prediction error metrics: root mean squared error, mean absolute error,
+    R-squared (variance explained), and mean absolute percentage error."""
     residuals = y_true - y_pred
     rmse = np.sqrt(np.mean(residuals ** 2))
     mae = np.mean(np.abs(residuals))
@@ -70,18 +81,18 @@ def evaluate(y_true, y_pred, label):
 
 
 def fit_and_evaluate(train, test):
-    """Fit M1.0 and M1.1 and evaluate on test set."""
+    """Fit demographic baseline models and evaluate on the held-out test set."""
     print("\nSTEP 2: MODEL FITTING AND EVALUATION")
 
     y_train = train['seconds'].values
     y_test = test['seconds'].values
 
     models = {
-        'M1.0 OLS (linear)': {
+        'Linear OLS': {
             'features': ['age_c', 'female', 'year_c'],
             'model': LinearRegression(),
         },
-        'M1.1 OLS (quad+int)': {
+        'Quadratic OLS': {
             'features': ['age_c', 'age_c2', 'female', 'year_c', 'age_c_female'],
             'model': LinearRegression(),
         },
@@ -102,6 +113,31 @@ def fit_and_evaluate(train, test):
         res_train = evaluate(y_train, pred_train, f'{label} [train]')
         res_test = evaluate(y_test, pred_test, f'{label} [test]')
         results.extend([res_train, res_test])
+
+    # History-augmented model: demographics + prior race history (repeat runners only)
+    # prior_mean_time = average of all previous Boston Marathon finish times for this runner
+    # prior_appearances = number of times this runner has previously appeared
+    hist_feats = ['age_c', 'age_c2', 'female', 'year_c', 'age_c_female',
+                  'prior_appearances', 'prior_mean_time']
+    train_hist = train[train['prior_mean_time'].notna()].copy()
+    test_hist = test[test['prior_mean_time'].notna()].copy()
+
+    if len(train_hist) > 0 and len(test_hist) > 0:
+        m_hist = LinearRegression()
+        m_hist.fit(train_hist[hist_feats].values, train_hist['seconds'].values)
+
+        res_train_h = evaluate(train_hist['seconds'].values,
+                               m_hist.predict(train_hist[hist_feats].values),
+                               'History OLS [train]')
+        res_test_h = evaluate(test_hist['seconds'].values,
+                              m_hist.predict(test_hist[hist_feats].values),
+                              'History OLS [test]')
+        results.extend([res_train_h, res_test_h])
+        models['History OLS'] = {'features': hist_feats, 'model': m_hist}
+
+        print(f"\n  History model evaluated on runners with at least one prior appearance:")
+        print(f"    Train subset: {len(train_hist):,} rows")
+        print(f"    Test subset:  {len(test_hist):,} rows")
 
     return results, models
 
@@ -132,8 +168,8 @@ def print_coefficients(train, models):
 
 
 def cross_validate(train):
-    """5-fold GroupKFold CV (grouped by year) on training set for M1.1."""
-    print("\nSTEP 3: CROSS-VALIDATION (5-fold GroupKFold by year, M1.1)")
+    """5-fold cross-validation grouped by year on the quadratic model."""
+    print("\nSTEP 3: CROSS-VALIDATION (5-fold grouped by year, quadratic model)")
 
     feats = ['age_c', 'age_c2', 'female', 'year_c', 'age_c_female']
     X = train[feats].values
@@ -175,8 +211,8 @@ def feature_importance(train):
 
 
 def main():
-    print("RQ1: DEMOGRAPHIC BASELINE PREDICTION")
-    print("Boston Marathon Finish Time -- Pre-Race Prediction")
+    print("DEMOGRAPHIC BASELINE PREDICTION")
+    print("Boston Marathon Finish Time -- Pre-Race Prediction from Demographics")
     print("=" * 70)
 
     train, test = load_data()
@@ -190,7 +226,7 @@ def main():
     test_results = [r for r in results if '[test]' in r['model']]
     best = min(test_results, key=lambda r: r['rmse_s'])
     print(f"Best test RMSE: {best['rmse_s']:.0f}s ({best['rmse_min']:.1f} min) -- {best['model']}")
-    print(f"This is the baseline that RQ2 (personalization) and RQ3 (in-race) must beat.")
+    print(f"This is the baseline that the personalized and in-race models must beat.")
 
 
 if __name__ == '__main__':
