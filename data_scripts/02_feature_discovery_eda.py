@@ -18,7 +18,7 @@ SPLIT_SECS = ['5k_seconds', '10k_seconds', '15k_seconds', '20k_seconds',
 def main():
     print("BOSTON MARATHON EXPLORATORY DATA ANALYSIS")
 
-    df = pd.read_csv(CLEANED_PATH, low_memory=False)
+    df = pd.read_csv(CLEANED_PATH, engine='pyarrow')
     df['decade'] = (df['year'] // 10) * 10
 
     # --- SECTION 1: DESCRIPTIVE STATISTICS ---
