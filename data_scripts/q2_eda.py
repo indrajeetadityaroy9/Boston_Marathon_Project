@@ -135,11 +135,8 @@ def compute_runner_slopes(df):
     print(f"  Median: {result['median_slope']:.1f} sec/yr")
     print(f"  Slowing (positive): {result['pct_slowing']:.1f}%")
     print(f"  Improving (negative): {result['pct_improving']:.1f}%")
-    print(f"\n--- Comparison with eda.py full-sample slopes ---")
-    print(f"  eda.py: n=22,453, mean=77.8, std=265.5, improving=34.6%")
-    print(f"  Q2:     n={n:,}, mean={result['mean_slope']:.1f}, "
-          f"std={result['std_slope']:.1f}, improving={result['pct_improving']:.1f}%")
-    print(f"  (Difference: Q2 is restricted to 2000-2019 + age-consistency filter)")
+    print(f"\n  (Note: Q2 sample is restricted to 2000-2019 with age-consistency filter;"
+          f" full-sample slopes from eda.py may differ)")
 
     return result
 

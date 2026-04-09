@@ -210,8 +210,7 @@ def main():
     # Split checkpoint times are only available for 2015-2017.
     # The correlation matrix shows how strongly each checkpoint predicts the final time.
     # High correlations between adjacent checkpoints (r > 0.99) indicate severe
-    # multicollinearity, which is why ridge/LASSO regression is needed instead of
-    # ordinary least squares when predicting finish time from splits (Q3).
+    # multicollinearity among split predictors.
     print("\nSECTION 6: SPLIT-TIME ANALYSIS (2015-2017)")
 
     splits = df[df['year'].between(2015, 2017)].copy()
@@ -259,7 +258,7 @@ def main():
             return (g['year'].max() - g['year'].min()) <= 20
         age_years = g[g['age'].notna()]
         if len(age_years) < 2:
-            return True
+            return (g['year'].max() - g['year'].min()) <= 20
         for i in range(1, len(age_years)):
             yr_gap = age_years['year'].iloc[i] - age_years['year'].iloc[i - 1]
             age_gap = age_years['age'].iloc[i] - age_years['age'].iloc[i - 1]
@@ -277,7 +276,7 @@ def main():
 
     # Age span measures how many years of aging data each runner covers.
     # Longer spans give more information for estimating individual aging slopes.
-    repeat_with_age = repeat_df[repeat_df['age'].notna()].copy()
+    repeat_with_age = repeat_df[repeat_df['age'].notna() & ~repeat_df['age_imputed']].copy()
     runner_age_stats = repeat_with_age.groupby('display_name')['age'].agg(
         n_races='count', age_span=lambda s: s.max() - s.min(),
     )
