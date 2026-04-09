@@ -15,9 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import config as cfg
 from src import data, metrics, rq1, rq2, rq3
 from src.lme4_backend import fit_lmer
-from src.rq2 import _SM_TO_LME4
-
-_EXOG_COLS = ['age_c', 'female', 'year_c']
+from src.rq2 import _SM_TO_LME4, _EXOG_COLS, _fe_array
 
 
 def run_rq1():
@@ -99,17 +97,13 @@ def run_rq2():
     exog = sm.add_constant(df[_EXOG_COLS])
     print(f"  Age centered at {age_mean:.1f}, year centered at {cfg.YEAR_CENTER}")
 
-    def _fe(result):
-        """Align lme4's (Intercept) naming with statsmodels' const for matrix multiplication."""
-        return np.array([result['fe_params'][_SM_TO_LME4.get(c, c)] for c in exog.columns])
-
     print("\nSTEP 3: INTRA-CLASS CORRELATION")
     icc_a = metrics.icc_anova(df, 'display_name', 'seconds')
     print(f"\n1. ANOVA-based ICC(1): {icc_a:.4f} ({icc_a*100:.1f}%)")
     m1_icc = fit_lmer(df, 'seconds ~ age_c + female + year_c + (1 | display_name)', reml=True)
-    icc_c, tau2_c, sig2_c = metrics.icc_conditional(m1_icc['tau2_0'], m1_icc['sigma2'])
+    icc_c = metrics.icc_conditional(m1_icc['tau2_0'], m1_icc['sigma2'])
     print(f"2. Conditional ICC: {icc_c:.4f} ({icc_c*100:.1f}%)")
-    print(f"   tau^2={tau2_c:,.0f}, sigma^2={sig2_c:,.0f}")
+    print(f"   tau^2={m1_icc['tau2_0']:,.0f}, sigma^2={m1_icc['sigma2']:,.0f}")
 
     print("\nSTEP 4: PER-RUNNER AGING SLOPES")
     slopes = rq2.compute_runner_slopes(df)
@@ -140,7 +134,7 @@ def run_rq2():
     print(f"  {'OLS':<6} {rmse_ols:>14.1f} {rmse_ols:>14.1f} {rmse_ols:>14.1f}")
     m2r_fe = None
     for label, r in [('RI', m1r), ('RI+RS', m2r)]:
-        fe_vals = _fe(r)
+        fe_vals = _fe_array(r['fe_params'], exog.columns)
         if label == 'RI+RS': m2r_fe = fe_vals
         print(f"  {label:<6} {r['cond_rmse']:>14.1f} {metrics.rmse(y, exog.values @ fe_vals):>14.1f} {np.sqrt(r['sigma2']):>14.1f}")
 

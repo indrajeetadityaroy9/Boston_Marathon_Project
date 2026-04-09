@@ -37,7 +37,7 @@ def icc_anova(df, group_col, value_col):
 
 def icc_conditional(tau2, sigma2):
     """ICC after accounting for fixed effects: tau^2 / (tau^2 + sigma^2)."""
-    return tau2 / (tau2 + sigma2), tau2, sigma2
+    return tau2 / (tau2 + sigma2)
 
 
 def variance_decomposition(result, df, fe_param_values):
