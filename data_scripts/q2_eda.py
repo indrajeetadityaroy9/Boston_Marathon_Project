@@ -16,7 +16,6 @@ warnings.filterwarnings('ignore', category=UserWarning, module='statsmodels')
 _FIT_KWARGS = dict(method='lbfgs', maxiter=200)
 
 CLEANED_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
-SUMMARY_PATH = Path(__file__).resolve().parent.parent / 'q2_results_summary.txt'
 
 
 def load_and_filter_data():
@@ -74,30 +73,16 @@ def compute_icc(df, groups, y):
     icc_anova = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
     print(f"\n1. ANOVA-based ICC(1): {icc_anova:.4f} ({icc_anova*100:.1f}%)")
 
-    null_exog = pd.DataFrame({'const': np.ones(n_obs)})
-    null_result = MixedLM(y, null_exog, groups=groups).fit(reml=True, **_FIT_KWARGS)
-    tau2_u = null_result.cov_re.iloc[0, 0]
-    sig2_u = null_result.scale
-    icc_uncond = tau2_u / (tau2_u + sig2_u)
-    print(f"2. Unconditional model ICC: {icc_uncond:.4f} ({icc_uncond*100:.1f}%)")
-    print(f"   tau^2={tau2_u:,.0f}, sigma^2={sig2_u:,.0f}")
-
     exog = sm.add_constant(df[['age_c', 'female', 'year_c']])
     m1_reml = MixedLM(y, exog, groups=groups).fit(reml=True, **_FIT_KWARGS)
     tau2_c = m1_reml.cov_re.iloc[0, 0]
     sig2_c = m1_reml.scale
     icc_cond = tau2_c / (tau2_c + sig2_c)
-    print(f"3. Conditional ICC (after age, gender, year): {icc_cond:.4f} ({icc_cond*100:.1f}%)")
+    print(f"2. Conditional ICC (after age, gender, year): {icc_cond:.4f} ({icc_cond*100:.1f}%)")
     print(f"   tau^2={tau2_c:,.0f}, sigma^2={sig2_c:,.0f}")
 
-    result = {
-        'icc_anova': icc_anova,
-        'icc_unconditional': icc_uncond,
-        'icc_conditional': icc_cond,
-        'tau2_uncond': tau2_u, 'sigma2_uncond': sig2_u,
-        'tau2_cond': tau2_c, 'sigma2_cond': sig2_c,
-    }
-    return result, m1_reml
+    return {'icc_anova': icc_anova, 'icc_conditional': icc_cond,
+            'tau2_cond': tau2_c, 'sigma2_cond': sig2_c}, m1_reml
 
 
 def compute_runner_slopes(df):
@@ -402,24 +387,12 @@ def additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re):
     return result
 
 
-def save_summary(all_results):
-    lines = ["Q2 MIXED-EFFECTS MODELING -- RESULTS SUMMARY", "=" * 60]
-    for section, data in all_results.items():
-        lines.append(f"\n[{section}]")
-        if isinstance(data, dict):
-            for k, v in data.items():
-                lines.append(f"  {k} = {v:.6f}" if isinstance(v, float) else f"  {k} = {v}")
-    SUMMARY_PATH.write_text('\n'.join(lines) + '\n')
-    print(f"\nSummary saved to {SUMMARY_PATH}")
-
 
 def main():
     t0 = time.time()
     print("Q2 MIXED-EFFECTS MODELING ANALYSIS")
     print("Boston Marathon 2000-2019")
     print("=" * 70)
-
-    all_results = {}
 
     df = load_and_filter_data()
 
@@ -434,44 +407,17 @@ def main():
     exog = sm.add_constant(df[['age_c', 'female', 'year_c']])
     exog_re = sm.add_constant(df[['age_c']])
 
-    icc_result, m1_reml = compute_icc(df, groups, y)
-    all_results['ICC'] = icc_result
-
-    all_results['Runner Slopes'] = compute_runner_slopes(df)
+    _, m1_reml = compute_icc(df, groups, y)
+    compute_runner_slopes(df)
 
     m0, m1_reml, m1_ml, m2_reml, m2_ml = fit_mixed_models(
         df, y, groups, exog, exog_re, m1_reml)
 
-    fe_detail = {}
-    for var in m2_reml.fe_params.index:
-        fe_detail[f'{var}_coef'] = m2_reml.fe_params[var]
-        fe_detail[f'{var}_se'] = m2_reml.bse_fe[var]
-        fe_detail[f'{var}_pvalue'] = m2_reml.pvalues[var]
-    all_results['Fixed Effects'] = fe_detail
+    model_selection(m0, m1_ml, m2_ml)
+    variance_decomposition(m2_reml, df, exog)
+    residual_diagnostics(m2_reml, df)
+    additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re)
 
-    cov_re = m2_reml.cov_re
-    all_results['Random Effects'] = {
-        'tau2_intercept': cov_re.iloc[0, 0],
-        'tau2_slope': cov_re.iloc[1, 1],
-        'cov_intercept_slope': cov_re.iloc[0, 1],
-        'corr_intercept_slope': cov_re.iloc[0, 1] / np.sqrt(cov_re.iloc[0, 0] * cov_re.iloc[1, 1]),
-        'sigma2_residual': m2_reml.scale,
-    }
-
-    rmse_dict = {'rmse_m0': np.sqrt(np.mean(m0.resid ** 2))}
-    for label, m in [('m1', m1_reml), ('m2', m2_reml)]:
-        rmse_dict[f'rmse_{label}_conditional'] = np.sqrt(np.mean(m.resid ** 2))
-        rmse_dict[f'rmse_{label}_marginal'] = np.sqrt(
-            np.mean((y - exog.values @ m.fe_params.values) ** 2))
-        rmse_dict[f'rmse_{label}_within_runner'] = np.sqrt(m.scale)
-    all_results['Model Fit'] = rmse_dict
-
-    all_results['Model Selection'] = model_selection(m0, m1_ml, m2_ml)
-    all_results['Variance Decomposition'] = variance_decomposition(m2_reml, df, exog)
-    all_results['Diagnostics'] = residual_diagnostics(m2_reml, df)
-    all_results['Additional'] = additional_analyses(m2_reml, m2_ml, df, y, groups, exog_re)
-
-    save_summary(all_results)
     print(f"\nTotal runtime: {time.time() - t0:.0f}s ({(time.time() - t0)/60:.1f} min)")
 
 
