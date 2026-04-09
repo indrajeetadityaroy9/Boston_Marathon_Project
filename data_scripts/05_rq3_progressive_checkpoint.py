@@ -23,7 +23,6 @@ from sklearn.preprocessing import StandardScaler
 
 CLEANED_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'boston_marathon_cleaned.csv'
 BLUP_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'runner_blups_leakfree.csv'
-BLUP_FALLBACK_PATH = Path(__file__).resolve().parent.parent / 'cleaned_data' / 'runner_blups.csv'
 
 # In-sample conditional RMSE from the mixed-effects personalization model
 # (from 04_rq2_personalized_mixed_effects.py, random intercept + slope model)
@@ -44,6 +43,8 @@ SPLITS = 'Ridge (splits only)'
 DEMO = 'Ridge (splits + demographics)'
 FULL = 'Ridge (splits + demo + history)'
 SPLITS_SUBSET = 'Ridge splits (history subset)'
+SINGLE = 'Ridge (single checkpoint)'
+DEMO_YEAR = 'Ridge (splits + demo + year)'
 
 
 def load_data():
@@ -54,39 +55,24 @@ def load_data():
 
     splits = df[df['year'].between(2015, 2017)].copy()
     splits = splits[splits[SPLIT_COLS].notna().all(axis=1) &
-                    splits['seconds'].notna() &
                     splits['age'].notna()].copy()
 
     splits['female'] = (splits['gender'] == 'F').astype(int)
+    splits['year_c'] = splits['year'] - 2016
 
     print(f"  Runners with complete splits: {len(splits):,}")
 
-    # Load and join per-runner predicted offsets (prefer leak-free version)
-    has_blups = False
-    if BLUP_PATH.exists():
-        blups = pd.read_csv(BLUP_PATH)
-        splits = splits.merge(blups, on='display_name', how='left')
-        n_with_blup = splits['blup_intercept'].notna().sum()
-        print(f"  Runners with leak-free history offsets: {n_with_blup:,} ({n_with_blup/len(splits)*100:.1f}%)")
-        has_blups = True
-    elif BLUP_FALLBACK_PATH.exists():
-        print("  WARNING: leak-free offsets not found, using full offsets (minor leakage).")
-        blups = pd.read_csv(BLUP_FALLBACK_PATH)
-        splits = splits.merge(blups, on='display_name', how='left')
-        n_with_blup = splits['blup_intercept'].notna().sum()
-        print(f"  Runners with history offsets (fallback): {n_with_blup:,} ({n_with_blup/len(splits)*100:.1f}%)")
-        has_blups = True
-    else:
-        print("  WARNING: No runner offsets found. Run 04_rq2_personalized_mixed_effects.py first.")
-        splits['blup_intercept'] = np.nan
-        splits['blup_slope'] = np.nan
+    blups = pd.read_csv(BLUP_PATH)
+    splits = splits.merge(blups, on='display_name', how='left')
+    n_with_blup = splits['blup_intercept'].notna().sum()
+    print(f"  Runners with leak-free history offsets: {n_with_blup:,} ({n_with_blup/len(splits)*100:.1f}%)")
 
     train = splits[splits['year'].isin([2015, 2016])].copy()
     test = splits[splits['year'] == 2017].copy()
     print(f"  Train (2015-2016): {len(train):,}")
     print(f"  Test  (2017):      {len(test):,}")
 
-    return train, test, has_blups
+    return train, test
 
 
 def evaluate(y_true, y_pred):
@@ -100,7 +86,7 @@ def evaluate(y_true, y_pred):
     return rmse, mae, r2
 
 
-def run_progressive_prediction(train, test, has_blups):
+def run_progressive_prediction(train, test):
     """Run all model variants at each of 9 checkpoints."""
     print("\nSTEP 2: PROGRESSIVE CHECKPOINT PREDICTION")
 
@@ -141,27 +127,43 @@ def run_progressive_prediction(train, test, has_blups):
         results.append({'checkpoint': cp_label, 'km': km, 'model': DEMO,
                         'rmse': rmse_d, 'mae': mae_d, 'r2': r2_d, 'n_test': len(test)})
 
+        # Single-checkpoint Ridge: only the current checkpoint time (no prior splits)
+        m = Ridge(alpha=1.0).fit(train[[cp]].values, y_train)
+        pred = m.predict(test[[cp]].values)
+        rmse_single, mae_single, r2_single = evaluate(y_test, pred)
+        results.append({'checkpoint': cp_label, 'km': km, 'model': SINGLE,
+                        'rmse': rmse_single, 'mae': mae_single, 'r2': r2_single,
+                        'n_test': len(test)})
+
+        # Splits + demographics + year: measures year-coefficient degradation
+        demo_year_feats = cumul_splits + demo_cols + ['year_c']
+        m = Ridge(alpha=1.0).fit(train[demo_year_feats].values, y_train)
+        pred = m.predict(test[demo_year_feats].values)
+        rmse_dy, mae_dy, r2_dy = evaluate(y_test, pred)
+        results.append({'checkpoint': cp_label, 'km': km, 'model': DEMO_YEAR,
+                        'rmse': rmse_dy, 'mae': mae_dy, 'r2': r2_dy,
+                        'n_test': len(test)})
+
         # History-augmented models (only for runners with individual offsets)
-        if has_blups and len(test_blup) > 0:
-            full_feats = cumul_splits + demo_cols + blup_cols
-            y_train_b = train_blup['seconds'].values
-            y_test_b = test_blup['seconds'].values
+        full_feats = cumul_splits + demo_cols + blup_cols
+        y_train_b = train_blup['seconds'].values
+        y_test_b = test_blup['seconds'].values
 
-            # Full model: splits + demographics + per-runner history offsets
-            m = Ridge(alpha=1.0).fit(train_blup[full_feats].values, y_train_b)
-            pred = m.predict(test_blup[full_feats].values)
-            rmse_f, mae_f, r2_f = evaluate(y_test_b, pred)
-            results.append({'checkpoint': cp_label, 'km': km, 'model': FULL,
-                            'rmse': rmse_f, 'mae': mae_f, 'r2': r2_f,
-                            'n_test': len(test_blup)})
+        # Full model: splits + demographics + per-runner history offsets
+        m = Ridge(alpha=1.0).fit(train_blup[full_feats].values, y_train_b)
+        pred = m.predict(test_blup[full_feats].values)
+        rmse_f, mae_f, r2_f = evaluate(y_test_b, pred)
+        results.append({'checkpoint': cp_label, 'km': km, 'model': FULL,
+                        'rmse': rmse_f, 'mae': mae_f, 'r2': r2_f,
+                        'n_test': len(test_blup)})
 
-            # Splits-only on same subset for fair comparison
-            m = Ridge(alpha=1.0).fit(train_blup[cumul_splits].values, y_train_b)
-            pred = m.predict(test_blup[cumul_splits].values)
-            rmse_sb, mae_sb, r2_sb = evaluate(y_test_b, pred)
-            results.append({'checkpoint': cp_label, 'km': km, 'model': SPLITS_SUBSET,
-                            'rmse': rmse_sb, 'mae': mae_sb, 'r2': r2_sb,
-                            'n_test': len(test_blup)})
+        # Splits-only on same subset for fair comparison
+        m = Ridge(alpha=1.0).fit(train_blup[cumul_splits].values, y_train_b)
+        pred = m.predict(test_blup[cumul_splits].values)
+        rmse_sb, mae_sb, r2_sb = evaluate(y_test_b, pred)
+        results.append({'checkpoint': cp_label, 'km': km, 'model': SPLITS_SUBSET,
+                        'rmse': rmse_sb, 'mae': mae_sb, 'r2': r2_sb,
+                        'n_test': len(test_blup)})
 
     return pd.DataFrame(results)
 
@@ -186,20 +188,18 @@ def print_convergence_table(results_df):
 
     # History-augmented comparison
     blup_results = results_df[results_df['model'].isin([FULL, SPLITS_SUBSET])]
-    if not blup_results.empty:
-        print(f"\n--- History Augmentation (n={blup_results['n_test'].iloc[0]:,} known runners) ---")
-        print(f"{'Checkpoint':>12} {'Splits':>12} {'+ History':>12} {'Gain':>12}")
-        print(f"{'':>12} {'RMSE (s)':>12} {'RMSE (s)':>12} {'(seconds)':>12}")
-        print("-" * 52)
-        for cp in cp_order:
-            s_row = blup_results[(blup_results['checkpoint'] == cp) &
-                                 (blup_results['model'] == SPLITS_SUBSET)]
-            f_row = blup_results[(blup_results['checkpoint'] == cp) &
-                                 (blup_results['model'] == FULL)]
-            if not s_row.empty and not f_row.empty:
-                s_rmse = s_row['rmse'].values[0]
-                f_rmse = f_row['rmse'].values[0]
-                print(f"  {cp:>10} {s_rmse:>10.0f} {f_rmse:>10.0f} {s_rmse - f_rmse:>+10.0f}")
+    print(f"\n--- History Augmentation (n={blup_results['n_test'].iloc[0]:,} known runners) ---")
+    print(f"{'Checkpoint':>12} {'Splits':>12} {'+ History':>12} {'Gain':>12}")
+    print(f"{'':>12} {'RMSE (s)':>12} {'RMSE (s)':>12} {'(seconds)':>12}")
+    print("-" * 52)
+    for cp in cp_order:
+        s_row = blup_results[(blup_results['checkpoint'] == cp) &
+                             (blup_results['model'] == SPLITS_SUBSET)]
+        f_row = blup_results[(blup_results['checkpoint'] == cp) &
+                             (blup_results['model'] == FULL)]
+        s_rmse = s_row['rmse'].values[0]
+        f_rmse = f_row['rmse'].values[0]
+        print(f"  {cp:>10} {s_rmse:>10.0f} {f_rmse:>10.0f} {s_rmse - f_rmse:>+10.0f}")
 
 
 def print_r2_convergence(results_df):
@@ -238,6 +238,50 @@ def feature_importance_at_checkpoints(train):
             print(f"    {feat:>15}: {coef:>10.1f}")
 
 
+def cumulative_vs_single_analysis(results_df):
+    """Compare cumulative-splits Ridge vs single-checkpoint Ridge at each checkpoint."""
+    print("\nSTEP 4b: CUMULATIVE vs SINGLE-CHECKPOINT COMPARISON")
+    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+
+    cumul = results_df[results_df['model'] == SPLITS].set_index('checkpoint')
+    single = results_df[results_df['model'] == SINGLE].set_index('checkpoint')
+
+    print(f"\n  {'Checkpoint':>12} {'Cumulative':>12} {'Single':>12} {'Advantage':>12}")
+    print(f"  {'':>12} {'RMSE (s)':>12} {'RMSE (s)':>12} {'(seconds)':>12}")
+    print("  " + "-" * 52)
+    for cp in cp_order:
+        c_rmse = cumul.loc[cp, 'rmse']
+        s_rmse = single.loc[cp, 'rmse']
+        diff = s_rmse - c_rmse
+        print(f"  {cp:>12} {c_rmse:>10.0f} {s_rmse:>10.0f} {diff:>+10.0f}")
+
+    # Report the mid-race range (10K-30K) for the proposal claim
+    mid_cps = ['10K', '15K', '20K', 'HALF', '25K', '30K']
+    mid_diffs = [single.loc[cp, 'rmse'] - cumul.loc[cp, 'rmse'] for cp in mid_cps]
+    print(f"\n  Mid-race (10K-30K) advantage range: {min(mid_diffs):.0f} to {max(mid_diffs):.0f} seconds")
+
+
+def year_degradation_analysis(results_df):
+    """Compare demo (no year) vs demo+year to quantify year-coefficient degradation."""
+    print("\nSTEP 4c: YEAR-COEFFICIENT DEGRADATION")
+    cp_order = [c.replace('_seconds', '').upper() for c in SPLIT_COLS]
+
+    demo = results_df[results_df['model'] == DEMO].set_index('checkpoint')
+    demo_year = results_df[results_df['model'] == DEMO_YEAR].set_index('checkpoint')
+
+    print(f"\n  {'Checkpoint':>12} {'No Year':>12} {'With Year':>12} {'Degradation':>12}")
+    print(f"  {'':>12} {'RMSE (s)':>12} {'RMSE (s)':>12} {'(seconds)':>12}")
+    print("  " + "-" * 52)
+    max_degrad = 0
+    for cp in cp_order:
+        d_rmse = demo.loc[cp, 'rmse']
+        dy_rmse = demo_year.loc[cp, 'rmse']
+        degrad = dy_rmse - d_rmse
+        max_degrad = max(max_degrad, degrad)
+        print(f"  {cp:>12} {d_rmse:>10.0f} {dy_rmse:>10.0f} {degrad:>+10.0f}")
+    print(f"\n  Maximum degradation from including year: {max_degrad:.0f} seconds")
+
+
 def crossover_analysis(results_df):
     """Identify where splits-only prediction beats the pre-race personalized prediction."""
     print("\nSTEP 4: CROSSOVER ANALYSIS")
@@ -256,11 +300,10 @@ def crossover_analysis(results_df):
             crossover_found = True
         print(f"  {row['checkpoint']:>12} {row['rmse']:>13.0f}s {'YES' if beats else 'no':>20}{marker}")
 
-    if crossover_found:
-        print(f"\n  Insight: At early checkpoints, knowing WHO the runner is (from their")
-        print(f"  race history) is more informative than knowing HOW FAST they started.")
-        print(f"  The crossover occurs when cumulative split data becomes rich enough")
-        print(f"  to outperform the runner's personalized baseline.")
+    print(f"\n  Insight: At early checkpoints, knowing WHO the runner is (from their")
+    print(f"  race history) is more informative than knowing HOW FAST they started.")
+    print(f"  The crossover occurs when cumulative split data becomes rich enough")
+    print(f"  to outperform the runner's personalized baseline.")
 
 
 def main():
@@ -268,12 +311,14 @@ def main():
     print("Boston Marathon -- Finish Time Prediction from Checkpoint Splits")
     print("=" * 70)
 
-    train, test, has_blups = load_data()
-    results_df = run_progressive_prediction(train, test, has_blups)
+    train, test = load_data()
+    results_df = run_progressive_prediction(train, test)
     print_convergence_table(results_df)
     print_r2_convergence(results_df)
     feature_importance_at_checkpoints(train)
     crossover_analysis(results_df)
+    cumulative_vs_single_analysis(results_df)
+    year_degradation_analysis(results_df)
 
     print("\n" + "=" * 70)
     best_5k = results_df[(results_df['checkpoint'] == '5K') &

@@ -26,7 +26,6 @@ def main():
     print("BOSTON MARATHON EXPLORATORY DATA ANALYSIS")
 
     df = pd.read_csv(CLEANED_PATH, low_memory=False)
-    df['age_imputed'] = df['age_imputed'].astype(str).str.strip().str.lower() == 'true'
     df['decade'] = (df['year'] // 10) * 10
 
     # --- SECTION 1: DESCRIPTIVE STATISTICS ---
@@ -55,14 +54,14 @@ def main():
     print("\nSECTION 2: NORMALITY TESTS")
 
     strata = {
-        'Overall': df['seconds'].dropna(),
-        'Male': df[df['gender'] == 'M']['seconds'].dropna(),
-        'Female': df[df['gender'] == 'F']['seconds'].dropna(),
+        'Overall': df['seconds'],
+        'Male': df[df['gender'] == 'M']['seconds'],
+        'Female': df[df['gender'] == 'F']['seconds'],
     }
 
     norm_rows = []
     for name, data in strata.items():
-        sample = data.sample(n=min(5000, len(data)), random_state=42)
+        sample = data.sample(n=5000, random_state=42)
         sw = shapiro(sample)
         norm_rows.append({'group': name, 'statistic': sw.statistic, 'p_value': sw.pvalue,
                           'reject_H0': sw.pvalue < 0.05})
@@ -76,7 +75,7 @@ def main():
 
     # Comparing skewness and kurtosis before and after log-transform shows how much
     # closer to symmetric the distribution becomes, even if it still rejects normality.
-    raw_secs = df['seconds'].dropna()
+    raw_secs = df['seconds']
     log_secs = np.log(raw_secs)
     print(f"\nShape Comparison:")
     print(f"  Raw:  skewness={raw_secs.skew():.4f}, kurtosis={raw_secs.kurtosis():.4f}")
@@ -89,15 +88,14 @@ def main():
     print("\nSECTION 3: CORRELATION ANALYSIS")
 
     valid_age = df[df['age'].notna() & ~df['age_imputed']].copy()
-    valid = valid_age[['age', 'seconds']].dropna()
-    print(f"\nUsing {len(valid)} rows with non-imputed age data")
+    print(f"\nUsing {len(valid_age)} rows with non-imputed age data")
 
     # Pearson measures linear association; Spearman measures monotonic association
     # without assuming a straight-line relationship. Both are reported because
     # the age-time relationship may be nonlinear (e.g., U-shaped performance curve).
-    pr = pearsonr(valid['age'], valid['seconds'])
+    pr = pearsonr(valid_age['age'], valid_age['seconds'])
     pr_ci = pr.confidence_interval()
-    sr = spearmanr(valid['age'], valid['seconds'])
+    sr = spearmanr(valid_age['age'], valid_age['seconds'])
     print(f"\nAge vs Seconds:")
     print(f"  Pearson r={pr.correlation:.4f}, p={pr.pvalue:.2e}, 95% CI=[{pr_ci.low:.4f}, {pr_ci.high:.4f}]")
     print(f"  Spearman rho={sr.correlation:.4f}, p={sr.pvalue:.2e}")
@@ -106,7 +104,7 @@ def main():
     # the age-time correlation would be biased because gender affects both age
     # distribution (males skew older in this dataset) and finish time.
     partial_model = smf.ols('seconds ~ age + C(gender)',
-                            data=valid_age[['age', 'seconds', 'gender']].dropna()).fit()
+                            data=valid_age[['age', 'seconds', 'gender']]).fit()
     age_t = partial_model.tvalues['age']
     partial_r = np.sign(age_t) * np.sqrt(age_t ** 2 / (age_t ** 2 + partial_model.df_resid))
     print(f"  Partial r (age | gender): {partial_r:.4f}, p={partial_model.pvalues['age']:.2e}")
@@ -117,8 +115,8 @@ def main():
     # Effect size distinguishes meaningful differences from large-sample artifacts.
     print("\nSECTION 4: GENDER COMPARISON")
 
-    m_sec = df[df['gender'] == 'M']['seconds'].dropna()
-    f_sec = df[df['gender'] == 'F']['seconds'].dropna()
+    m_sec = df[df['gender'] == 'M']['seconds']
+    f_sec = df[df['gender'] == 'F']['seconds']
 
     # Welch's t-test compares means without assuming equal variance between groups.
     # Used instead of Student's t-test because Levene's test rejects equal variance.
@@ -146,18 +144,17 @@ def main():
     # Repeating per decade shows whether the gender gap is closing over time.
     gd_rows = []
     for decade in sorted(df[df['gender'] == 'F']['decade'].unique()):
-        m_d = df[(df['decade'] == decade) & (df['gender'] == 'M')]['seconds'].dropna()
-        f_d = df[(df['decade'] == decade) & (df['gender'] == 'F')]['seconds'].dropna()
-        if len(m_d) > 1 and len(f_d) > 1:
-            mwu_d = mannwhitneyu(m_d, f_d, alternative='two-sided')
-            g_d, _ = effectsize_smd(
-                m_d.mean(), m_d.std(ddof=1), m_d.count(),
-                f_d.mean(), f_d.std(ddof=1), f_d.count(),
-            )
-            gd_rows.append({
-                'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d),
-                'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d,
-            })
+        m_d = df[(df['decade'] == decade) & (df['gender'] == 'M')]['seconds']
+        f_d = df[(df['decade'] == decade) & (df['gender'] == 'F')]['seconds']
+        mwu_d = mannwhitneyu(m_d, f_d, alternative='two-sided')
+        g_d, _ = effectsize_smd(
+            m_d.mean(), m_d.std(ddof=1), m_d.count(),
+            f_d.mean(), f_d.std(ddof=1), f_d.count(),
+        )
+        gd_rows.append({
+            'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d),
+            'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d,
+        })
     print("\nGender Gap by Decade:")
     print(pd.DataFrame(gd_rows).set_index('decade').to_string())
 
@@ -168,12 +165,11 @@ def main():
     # a quadratic age term in the prediction models.
     print("\nSECTION 5: AGE GROUP ANALYSIS")
 
-    aged = df[df['age'].between(14, 90) & ~df['age_imputed']].copy()
+    aged = df[df['age'].notna() & ~df['age_imputed']].copy()
     aged['age_group'] = pd.cut(aged['age'],
                                bins=[14, 30, 40, 50, 60, 70, 100],
                                labels=['14-29', '30-39', '40-49', '50-59', '60-69', '70+'],
                                right=False)
-    aged = aged.dropna(subset=['age_group'])
     print(f"\nRows with valid age (14-90): {len(aged)}")
 
     print("\nAge Group Stats:")
@@ -183,7 +179,7 @@ def main():
 
     # Kruskal-Wallis tests whether at least one age group differs from the others.
     # It is the non-parametric version of one-way ANOVA, using ranks instead of raw values.
-    kw = kruskal(*[g['seconds'].dropna().values
+    kw = kruskal(*[g['seconds'].values
                     for _, g in aged.groupby('age_group', observed=True)])
     print(f"\nKruskal-Wallis: H={kw.statistic:.4f}, p={kw.pvalue:.2e}")
 
@@ -201,7 +197,7 @@ def main():
 
     # Tukey's HSD is the parametric post-hoc test, comparing all pairs of group means
     # while controlling the family-wise error rate.
-    tukey = pairwise_tukeyhsd(aged['seconds'].dropna(), aged['age_group'].dropna())
+    tukey = pairwise_tukeyhsd(aged['seconds'], aged['age_group'])
     print("\nTukey's HSD:")
     print(tukey.summary())
 
@@ -213,7 +209,7 @@ def main():
     print("\nSECTION 6: SPLIT-TIME ANALYSIS (2015-2017)")
 
     splits = df[df['year'].between(2015, 2017)].copy()
-    splits = splits[splits[SPLIT_SECS].notna().all(axis=1) & splits['seconds'].notna()].copy()
+    splits = splits[splits[SPLIT_SECS].notna().all(axis=1)].copy()
     print(f"\nRows with valid split data: {len(splits)}")
 
     print("\nSplit-Time Correlation Matrix:")
@@ -232,6 +228,38 @@ def main():
 
     print("\nPacing Distribution by Year (%):")
     print((pd.crosstab(splits['year'], splits['pacing_type'], normalize='index') * 100).to_string())
+
+    # Overall pacing distribution across all years
+    overall_pacing = splits['pacing_type'].value_counts(normalize=True).sort_index() * 100
+    print(f"\nOverall Pacing Distribution:")
+    for ptype, pct in overall_pacing.items():
+        print(f"  {ptype}: {pct:.1f}%")
+
+    # Kruskal-Wallis test: do pacing groups have different finish times?
+    kw_pace = kruskal(*[g['seconds'].values
+                        for _, g in splits.groupby('pacing_type', observed=True)])
+    print(f"\nKruskal-Wallis (pacing): H={kw_pace.statistic:.2f}, p={kw_pace.pvalue:.2e}")
+
+    # Eta-squared effect size for pacing groups (overall)
+    grand_mean_pace = splits['seconds'].mean()
+    pace_group_means = splits.groupby('pacing_type', observed=True)['seconds'].transform('mean')
+    ss_between_pace = ((pace_group_means - grand_mean_pace) ** 2).sum()
+    ss_total_pace = ((splits['seconds'] - grand_mean_pace) ** 2).sum()
+    eta_sq_pace = ss_between_pace / ss_total_pace
+    print(f"Eta-squared (pacing): {eta_sq_pace:.4f} ({eta_sq_pace*100:.1f}% of variance)")
+
+    # Per-year eta-squared to verify "within-year effect sizes range from η²=0.006 to 0.025"
+    print(f"\nPer-Year Eta-squared (pacing):")
+    for yr, yr_df in splits.groupby('year'):
+        gm = yr_df['seconds'].mean()
+        pm = yr_df.groupby('pacing_type', observed=True)['seconds'].transform('mean')
+        ss_b = ((pm - gm) ** 2).sum()
+        ss_t = ((yr_df['seconds'] - gm) ** 2).sum()
+        print(f"  {yr}: eta_sq={ss_b / ss_t:.4f}")
+
+    # Dunn's post-hoc (same pattern as Section 5 age group analysis)
+    print("\nDunn's Post-hoc Pacing (Bonferroni):")
+    print(sp.posthoc_dunn(splits, val_col='seconds', group_col='pacing_type', p_adjust='bonferroni').to_string())
 
     # --- SECTION 7: REPEAT RUNNER PROFILING ---
     # About half the dataset consists of runners who appear in multiple years.
@@ -290,15 +318,14 @@ def main():
     # finish time is due to stable differences between runners vs. race-to-race variation.
     # A high ICC means runners have consistent ability levels across years, which
     # justifies adding per-runner random intercepts to the mixed-effects model.
-    repeat_secs = repeat_df[repeat_df['seconds'].notna()].copy()
-    runner_means = repeat_secs.groupby('display_name')['seconds'].transform('mean')
-    ss_between = ((runner_means - repeat_secs['seconds'].mean()) ** 2).sum()
-    ss_within = ((repeat_secs['seconds'] - runner_means) ** 2).sum()
-    n_runners = repeat_secs['display_name'].nunique()
-    n_obs = len(repeat_secs)
+    runner_means = repeat_df.groupby('display_name')['seconds'].transform('mean')
+    ss_between = ((runner_means - repeat_df['seconds'].mean()) ** 2).sum()
+    ss_within = ((repeat_df['seconds'] - runner_means) ** 2).sum()
+    n_runners = repeat_df['display_name'].nunique()
+    n_obs = len(repeat_df)
     ms_between = ss_between / (n_runners - 1)
     ms_within = ss_within / (n_obs - n_runners)
-    ni = repeat_secs.groupby('display_name').size()
+    ni = repeat_df.groupby('display_name').size()
     k0 = (n_obs - (ni ** 2).sum() / n_obs) / (n_runners - 1)
     icc = (ms_between - ms_within) / (ms_between + (k0 - 1) * ms_within)
 
@@ -312,14 +339,12 @@ def main():
     # each slope is estimated from a meaningful range of ages.
     runners_for_slope = runner_age_stats[runner_age_stats['age_span'] >= 5].index
     slope_df = repeat_with_age[
-        repeat_with_age['display_name'].isin(runners_for_slope) &
-        repeat_with_age['seconds'].notna()
+        repeat_with_age['display_name'].isin(runners_for_slope)
     ]
     runner_slopes = slope_df.groupby('display_name').apply(
-        lambda g: np.polyfit(g['age'].values, g['seconds'].values, 1)[0]
-        if len(g) >= 2 else np.nan,
+        lambda g: np.polyfit(g['age'].values, g['seconds'].values, 1)[0],
         include_groups=False,
-    ).dropna()
+    )
 
     print(f"\nWithin-Runner Aging Slopes (n={len(runner_slopes)}, age span >=5yr):")
     print(f"  Mean: {runner_slopes.mean():.1f} sec/yr, Median: {runner_slopes.median():.1f} sec/yr, Std: {runner_slopes.std():.1f} sec/yr")

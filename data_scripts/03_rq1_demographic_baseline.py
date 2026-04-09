@@ -36,7 +36,6 @@ def load_data():
                      usecols=['year', 'display_name', 'age', 'gender', 'seconds', 'age_imputed'],
                      dtype={'gender': 'category', 'display_name': str})
     df = df[~df['age_imputed'] & df['age'].notna() & (df['year'] >= 2000)].copy()
-    df = df.dropna(subset=['seconds'])
     print(f"  Non-imputed, age-valid, 2000+: {len(df):,} rows")
 
     # Compute prior race history (leak-free: uses only prior years via shift)
@@ -122,22 +121,21 @@ def fit_and_evaluate(train, test):
     train_hist = train[train['prior_mean_time'].notna()].copy()
     test_hist = test[test['prior_mean_time'].notna()].copy()
 
-    if len(train_hist) > 0 and len(test_hist) > 0:
-        m_hist = LinearRegression()
-        m_hist.fit(train_hist[hist_feats].values, train_hist['seconds'].values)
+    m_hist = LinearRegression()
+    m_hist.fit(train_hist[hist_feats].values, train_hist['seconds'].values)
 
-        res_train_h = evaluate(train_hist['seconds'].values,
-                               m_hist.predict(train_hist[hist_feats].values),
-                               'History OLS [train]')
-        res_test_h = evaluate(test_hist['seconds'].values,
-                              m_hist.predict(test_hist[hist_feats].values),
-                              'History OLS [test]')
-        results.extend([res_train_h, res_test_h])
-        models['History OLS'] = {'features': hist_feats, 'model': m_hist}
+    res_train_h = evaluate(train_hist['seconds'].values,
+                           m_hist.predict(train_hist[hist_feats].values),
+                           'History OLS [train]')
+    res_test_h = evaluate(test_hist['seconds'].values,
+                          m_hist.predict(test_hist[hist_feats].values),
+                          'History OLS [test]')
+    results.extend([res_train_h, res_test_h])
+    models['History OLS'] = {'features': hist_feats, 'model': m_hist}
 
-        print(f"\n  History model evaluated on runners with at least one prior appearance:")
-        print(f"    Train subset: {len(train_hist):,} rows")
-        print(f"    Test subset:  {len(test_hist):,} rows")
+    print(f"\n  History model evaluated on runners with at least one prior appearance:")
+    print(f"    Train subset: {len(train_hist):,} rows")
+    print(f"    Test subset:  {len(test_hist):,} rows")
 
     return results, models
 
@@ -161,10 +159,9 @@ def print_coefficients(train, models):
         feats = spec['features']
         model = spec['model']
         print(f"\n  {label}:")
-        if hasattr(model, 'coef_'):
-            for feat, coef in zip(feats, model.coef_):
-                print(f"    {feat:>15}: {coef:>10.2f}")
-            print(f"    {'intercept':>15}: {model.intercept_:>10.2f}")
+        for feat, coef in zip(feats, model.coef_):
+            print(f"    {feat:>15}: {coef:>10.2f}")
+        print(f"    {'intercept':>15}: {model.intercept_:>10.2f}")
 
 
 def cross_validate(train):

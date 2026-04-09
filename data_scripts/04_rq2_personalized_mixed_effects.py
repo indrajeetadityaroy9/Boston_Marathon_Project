@@ -428,30 +428,21 @@ def temporal_holdout_evaluation(df_full):
 
     # Marginal prediction: fixed effects only
     fe_params = m2_holdout.fe_params.values
-    fe_cols = ['const', 'age_c', 'female', 'year_c']
 
-    if len(test_known) > 0:
-        X_known = sm.add_constant(test_known[['age_c', 'female', 'year_c']])
-        marg_pred_known = X_known.values @ fe_params
-        marg_rmse_known = np.sqrt(np.mean((test_known['seconds'].values - marg_pred_known) ** 2))
+    X_known = sm.add_constant(test_known[['age_c', 'female', 'year_c']])
+    marg_pred_known = X_known.values @ fe_params
+    marg_rmse_known = np.sqrt(np.mean((test_known['seconds'].values - marg_pred_known) ** 2))
 
-        # Conditional prediction: marginal + per-runner offset
-        re_dict = m2_holdout.random_effects
-        blup_intercepts = test_known['display_name'].map(
-            lambda n: re_dict[n].iloc[0] if n in re_dict else 0.0)
-        blup_slopes = test_known['display_name'].map(
-            lambda n: re_dict[n].iloc[1] if n in re_dict else 0.0)
-        cond_pred_known = marg_pred_known + blup_intercepts.values + blup_slopes.values * test_known['age_c'].values
-        cond_rmse_known = np.sqrt(np.mean((test_known['seconds'].values - cond_pred_known) ** 2))
-    else:
-        marg_rmse_known = cond_rmse_known = float('nan')
+    # Conditional prediction: marginal + per-runner offset
+    re_dict = m2_holdout.random_effects
+    blup_intercepts = test_known['display_name'].map(lambda n: re_dict[n].iloc[0])
+    blup_slopes = test_known['display_name'].map(lambda n: re_dict[n].iloc[1])
+    cond_pred_known = marg_pred_known + blup_intercepts.values + blup_slopes.values * test_known['age_c'].values
+    cond_rmse_known = np.sqrt(np.mean((test_known['seconds'].values - cond_pred_known) ** 2))
 
-    if len(test_new) > 0:
-        X_new = sm.add_constant(test_new[['age_c', 'female', 'year_c']])
-        marg_pred_new = X_new.values @ fe_params
-        marg_rmse_new = np.sqrt(np.mean((test_new['seconds'].values - marg_pred_new) ** 2))
-    else:
-        marg_rmse_new = float('nan')
+    X_new = sm.add_constant(test_new[['age_c', 'female', 'year_c']])
+    marg_pred_new = X_new.values @ fe_params
+    marg_rmse_new = np.sqrt(np.mean((test_new['seconds'].values - marg_pred_new) ** 2))
 
     personalization_oos = marg_rmse_known - cond_rmse_known
 
