@@ -6,7 +6,7 @@ A multi-scale prediction framework for Boston Marathon finish times, progressive
 
 - **RQ1 (Pre-race demographic prediction):** How accurately can finish time be predicted from age, gender, and year alone? Adding a runner's historical mean finish time reduces test RMSE from 2,504s to 1,812s (R² from 0.17 to 0.51).
 - **RQ2 (Pre-race personalized prediction):** For repeat runners, how much does a mixed-effects model improve prediction? In-sample conditional RMSE = 996s; out-of-sample = 1,593s. Honest value of personalization = 651s (~10.8 min).
-- **RQ3 (In-race progressive prediction):** How does prediction improve at each checkpoint? Ridge regression RMSE drops from 1,259s at 5K to 760s at halfway to 124s at 40K. Splits outperform personalized history at ~15K.
+- **RQ3 (In-race progressive prediction):** How does prediction improve at each checkpoint? Ridge regression RMSE drops from 1,259s at 5K to 760s at halfway to 124s at 40K. At early checkpoints (5K, 10K), knowing a runner's past race history gives a better prediction than knowing their current split time. But by 15K, the accumulating split data becomes more informative than the runner's historical profile — this is the crossover point.
 
 ## Setup
 
