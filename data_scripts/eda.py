@@ -169,7 +169,7 @@ def main():
     # at large sample sizes, and running both shows consistent results.
     print("\nSECTION 5: AGE GROUP ANALYSIS")
 
-    aged = df[df['age'].between(14, 90)].copy()
+    aged = df[df['age'].between(14, 90) & ~df['age_imputed']].copy()
     aged['age_group'] = pd.cut(aged['age'],
                                bins=[14, 30, 40, 50, 60, 70, 100],
                                labels=['14-29', '30-39', '40-49', '50-59', '60-69', '70+'],
