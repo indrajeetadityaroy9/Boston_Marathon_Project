@@ -12,9 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 import numpy as np
 import statsmodels.api as sm
 
-from boston_marathon import config as cfg
-from boston_marathon import data, metrics, rq1, rq2, rq3
-from boston_marathon.lme4_backend import fit_lmer
+from boston_marathon import config as cfg, data, metrics, rq1, rq2, rq3
 from boston_marathon.rq2 import _SM_TO_LME4, _EXOG_COLS, _fe_array
 
 
@@ -25,12 +23,11 @@ def run_rq1():
 
     print("STEP 1: DATA LOADING")
     df = data.load_cleaned(usecols=['year', 'display_name', 'age', 'gender', 'seconds', 'age_imputed'])
-    df = data.filter_non_imputed(df)
-    df = data.add_prior_history(df)
+    df = data.add_prior_history(df[~df['age_imputed'] & df['age'].notna() & (df['year'] >= 2000)].copy())
     train, test = data.temporal_split(df, cfg.RQ1_TRAIN_YEARS, cfg.RQ1_TEST_YEARS)
     age_mean = train['age'].mean()
-    for d in [train, test]:
-        data.add_centered_features(d, age_mean, cfg.YEAR_CENTER)
+    for frame in (train, test):
+        data.add_centered_features(frame, age_mean, cfg.YEAR_CENTER)
     print(f"  Non-imputed, age-valid, 2000+: {len(df):,} rows")
     print(f"  Age centered at {age_mean:.1f} (train mean)")
     print(f"  Train (2000-2017): {len(train):,} rows ({train['prior_mean_time'].notna().sum():,} with prior history)")
@@ -150,7 +147,9 @@ def run_rq2():
     print(f"  {'Random Intcpt + Slope + Weather':<30} {m3r['cond_rmse']:>10.1f}")
 
     print("\nSTEP 6: MODEL COMPARISON (Likelihood Ratio Tests)")
-    rows, lrt01, lrt12 = rq2.model_comparison_table(m0, mdls['m1_ml'], mdls['m2_ml'])
+    rows = [('OLS', 5, m0.llf, m0.aic, m0.bic), ('Rand-Int', 6, mdls['m1_ml']['loglik'], mdls['m1_ml']['aic'], mdls['m1_ml']['bic']), ('Intcpt+Slope', 8, mdls['m2_ml']['loglik'], mdls['m2_ml']['aic'], mdls['m2_ml']['bic'])]
+    lrt01 = metrics.boundary_lrt(m0.llf, mdls['m1_ml']['loglik'], 1)
+    lrt12 = metrics.boundary_lrt(mdls['m1_ml']['loglik'], mdls['m2_ml']['loglik'], 2)
     print(f"  OLS vs Random Intercept:          LR={lrt01['lr_stat']:.2f}, p_corrected={lrt01['p_corrected']:.2e}")
     print(f"  Random Intercept vs Intcpt+Slope:  LR={lrt12['lr_stat']:.2f}, p_corrected={lrt12['p_corrected']:.2e}")
     m3_ml = mdls['m3_ml']
@@ -252,8 +251,7 @@ def run_rq3():
     results_df = rq3.run_progressive(train, test)
 
     print("\n--- Prediction Convergence (test set 2017) ---")
-    pivot = results_df[results_df['model'].isin([cfg.NAIVE, cfg.SPLITS, cfg.DEMO])].pivot(
-        index='checkpoint', columns='model', values='rmse').reindex(cfg.CP_ORDER)
+    pivot = results_df[results_df['model'].isin([cfg.NAIVE, cfg.SPLITS, cfg.DEMO])].pivot(index='checkpoint', columns='model', values='rmse').reindex(cfg.CP_ORDER)
     print(f"\n{'Checkpoint':>12} {'Naive':>8} {'Splits':>8} {'Demo':>8}")
     print("-" * 42)
     for cp in cfg.CP_ORDER:

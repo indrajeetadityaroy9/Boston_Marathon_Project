@@ -41,7 +41,7 @@ def parse_time_to_seconds(series):
 def load_and_unify(filepath, year):
     """Load a single CSV and unify to the standard schema."""
     filepath = Path(filepath)
-    with open(filepath, 'r', errors='replace') as f:
+    with filepath.open('r', errors='replace') as f:
         total_lines = sum(1 for _ in f) - 1
     df = pd.read_csv(filepath, na_values=NA_VALUES, dtype='string', on_bad_lines='skip')
     skipped = total_lines - len(df)
@@ -53,12 +53,7 @@ def load_and_unify(filepath, year):
     if 'place_overall' in df.columns:
         if 'contry_citizenship' in df.columns:
             df = df.rename(columns={'contry_citizenship': 'country_citizenship'})
-        address_parts = (
-            df[['city', 'state', 'country_residence']]
-            .astype('string')
-            .apply(lambda col: col.str.strip())
-            .replace('', pd.NA)
-        )
+        address_parts = df[['city', 'state', 'country_residence']].astype('string').apply(lambda col: col.str.strip()).replace('', pd.NA)
         df['residence'] = address_parts.stack(future_stack=True).dropna().groupby(level=0).agg(', '.join).reindex(df.index)
         if 'name' in df.columns and 'display_name' not in df.columns:
             df = df.rename(columns={'name': 'display_name'})
@@ -91,12 +86,8 @@ def impute_age(df, *, n_neighbors=5, min_validity=0.50):
     """Impute missing age via KNNImputer for years with sufficient valid age data."""
     df['age_imputed'] = False
 
-    age_grp = df.groupby('year')['age']
-    age_validity = age_grp.count() / age_grp.size()
-    imputable_years = age_validity[age_validity >= min_validity].index.tolist()
-
-    mask_imputable = df['year'].isin(imputable_years)
-    sub = df.loc[mask_imputable].copy()
+    age_validity = df.groupby('year')['age'].count() / df.groupby('year')['age'].size()
+    sub = df.loc[df['year'].isin(age_validity[age_validity >= min_validity].index)].copy()
 
     n_to_impute = sub['age'].isna().sum()
     print(f"  Imputing {n_to_impute} missing age values via KNNImputer...")
@@ -111,11 +102,9 @@ def impute_age(df, *, n_neighbors=5, min_validity=0.50):
     preprocess = ColumnTransformer(transformers=[
         ('age', 'passthrough', ['age']),
         ('num', StandardScaler(), ['year', 'seconds']),
-        ('gender', OrdinalEncoder(categories=[['M', 'F']], dtype=float,
-                                  handle_unknown='use_encoded_value', unknown_value=np.nan), ['gender']),
+        ('gender', OrdinalEncoder(categories=[['M', 'F']], dtype=float, handle_unknown='use_encoded_value', unknown_value=np.nan), ['gender']),
     ], verbose_feature_names_out=False).set_output(transform='pandas')
-    pipe = Pipeline([('pre', preprocess), ('imp', KNNImputer(n_neighbors=n_neighbors))
-                     ]).set_output(transform='pandas')
+    pipe = Pipeline([('pre', preprocess), ('imp', KNNImputer(n_neighbors=n_neighbors))]).set_output(transform='pandas')
     imputed_series = pipe.fit_transform(sub_valid)['age']
 
     imputed_indices = was_null[was_null].index
@@ -135,10 +124,7 @@ def main():
         and '_without-diverted' not in path.name
         and (match := re.search(r'results(\d{4})', path.stem))
     ]
-    df = pd.concat(
-        [load_and_unify(fp, yr) for fp, yr in manifest],
-        ignore_index=True,
-    )
+    df = pd.concat([load_and_unify(fp, yr) for fp, yr in manifest], ignore_index=True)
 
     df = clean_types(df)
 

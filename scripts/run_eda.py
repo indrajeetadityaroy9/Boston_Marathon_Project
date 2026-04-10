@@ -11,12 +11,13 @@ from statsmodels.stats.anova import anova_lm
 from statsmodels.stats.meta_analysis import effectsize_smd
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'src'))
 
-CLEANED_PATH = Path(__file__).resolve().parent.parent / 'data' / 'processed' / 'boston_marathon_cleaned.csv'
+from boston_marathon.metrics import icc_anova
 
-SPLIT_SECS = ['5k_seconds', '10k_seconds', '15k_seconds', '20k_seconds',
-              'half_seconds', '25k_seconds', '30k_seconds', '35k_seconds', '40k_seconds']
+CLEANED_PATH = ROOT / 'data' / 'processed' / 'boston_marathon_cleaned.csv'
+SPLIT_SECS = ['5k_seconds', '10k_seconds', '15k_seconds', '20k_seconds', 'half_seconds', '25k_seconds', '30k_seconds', '35k_seconds', '40k_seconds']
 
 
 def main():
@@ -50,22 +51,16 @@ def main():
     # 5000-row subsample avoids trivially rejecting normality due to large sample size.
     print("\nSECTION 2: NORMALITY TESTS")
 
-    strata = {
-        'Overall': df['seconds'],
-        'Male': df[df['gender'] == 'M']['seconds'],
-        'Female': df[df['gender'] == 'F']['seconds'],
-    }
+    strata = {'Overall': df['seconds'], 'Male': df[df['gender'] == 'M']['seconds'], 'Female': df[df['gender'] == 'F']['seconds']}
 
     norm_rows = []
     for name, data in strata.items():
         sample = data.sample(n=5000, random_state=42)
         sw = shapiro(sample)
-        norm_rows.append({'group': name, 'statistic': sw.statistic, 'p_value': sw.pvalue,
-                          'reject_H0': sw.pvalue < 0.05})
+        norm_rows.append({'group': name, 'statistic': sw.statistic, 'p_value': sw.pvalue, 'reject_H0': sw.pvalue < 0.05})
         log_sample = np.log(sample)
         sw_log = shapiro(log_sample)
-        norm_rows.append({'group': f'{name} (log)', 'statistic': sw_log.statistic, 'p_value': sw_log.pvalue,
-                          'reject_H0': sw_log.pvalue < 0.05})
+        norm_rows.append({'group': f'{name} (log)', 'statistic': sw_log.statistic, 'p_value': sw_log.pvalue, 'reject_H0': sw_log.pvalue < 0.05})
 
     print("\nShapiro-Wilk Results (n=5000 samples):")
     print(pd.DataFrame(norm_rows).to_string(index=False))
@@ -126,8 +121,7 @@ def main():
     # Hedges' g quantifies how large the gender gap is in standard deviation units.
     # With n=600k, even tiny differences are statistically significant, so effect size
     # tells us whether the difference is practically meaningful.
-    g, _ = effectsize_smd(m_sec.mean(), m_sec.std(ddof=1), m_sec.count(),
-                          f_sec.mean(), f_sec.std(ddof=1), f_sec.count())
+    g, _ = effectsize_smd(m_sec.mean(), m_sec.std(ddof=1), m_sec.count(), f_sec.mean(), f_sec.std(ddof=1), f_sec.count())
     abs_g = abs(g)
     print(f"Hedges' g (M-F): {g:.4f} ({'small' if abs_g < 0.5 else 'medium' if abs_g < 0.8 else 'large'} effect; "
           f"negative = males faster)")
@@ -138,10 +132,8 @@ def main():
         m_d = df[(df['decade'] == decade) & (df['gender'] == 'M')]['seconds']
         f_d = df[(df['decade'] == decade) & (df['gender'] == 'F')]['seconds']
         mwu_d = mannwhitneyu(m_d, f_d, alternative='two-sided')
-        g_d, _ = effectsize_smd(m_d.mean(), m_d.std(ddof=1), m_d.count(),
-                                f_d.mean(), f_d.std(ddof=1), f_d.count())
-        gd_rows.append({'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d),
-                        'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d})
+        g_d, _ = effectsize_smd(m_d.mean(), m_d.std(ddof=1), m_d.count(), f_d.mean(), f_d.std(ddof=1), f_d.count())
+        gd_rows.append({'decade': decade, 'n_male': len(m_d), 'n_female': len(f_d), 'mean_diff': m_d.mean() - f_d.mean(), 'p_value': mwu_d.pvalue, 'hedges_g': g_d})
     print("\nGender Gap by Decade:")
     print(pd.DataFrame(gd_rows).set_index('decade').to_string())
 
@@ -153,21 +145,15 @@ def main():
     print("\nSECTION 5: AGE GROUP ANALYSIS")
 
     aged = df[df['age'].notna() & ~df['age_imputed']].copy()
-    aged['age_group'] = pd.cut(aged['age'],
-                               bins=[14, 30, 40, 50, 60, 70, 100],
-                               labels=['14-29', '30-39', '40-49', '50-59', '60-69', '70+'],
-                               right=False)
+    aged['age_group'] = pd.cut(aged['age'], bins=[14, 30, 40, 50, 60, 70, 100], labels=['14-29', '30-39', '40-49', '50-59', '60-69', '70+'], right=False)
     print(f"\nRows with valid age (14-90): {len(aged)}")
 
     print("\nAge Group Stats:")
-    print(aged.groupby('age_group', observed=True)['seconds'].agg(
-        n='count', mean='mean', median='median', std='std',
-    ).to_string())
+    print(aged.groupby('age_group', observed=True)['seconds'].agg(n='count', mean='mean', median='median', std='std').to_string())
 
     # Kruskal-Wallis tests whether at least one age group differs from the others.
     # It is the non-parametric version of one-way ANOVA, using ranks instead of raw values.
-    kw = kruskal(*[g['seconds'].values
-                    for _, g in aged.groupby('age_group', observed=True)])
+    kw = kruskal(*[g['seconds'].values for _, g in aged.groupby('age_group', observed=True)])
     print(f"\nKruskal-Wallis: H={kw.statistic:.4f}, p={kw.pvalue:.2e}")
 
     # Dunn's test identifies which specific pairs of age groups differ.
@@ -208,10 +194,7 @@ def main():
     # >1.01 = slowed down in the second half (positive split).
     second_half = splits['seconds'] - splits['half_seconds']
     pacing_ratio = second_half / splits['half_seconds']
-    splits['pacing_type'] = pd.cut(
-        pacing_ratio,
-        bins=[-np.inf, 0.99, 1.01, np.inf],
-        labels=['negative_split', 'even_split', 'positive_split'])
+    splits['pacing_type'] = pd.cut(pacing_ratio, bins=[-np.inf, 0.99, 1.01, np.inf], labels=['negative_split', 'even_split', 'positive_split'])
 
     print("\nPacing Distribution by Year (%):")
     print((pd.crosstab(splits['year'], splits['pacing_type'], normalize='index') * 100).to_string())
@@ -284,9 +267,7 @@ def main():
     # Age span measures how many years of aging data each runner covers.
     # Longer spans give more information for estimating individual aging slopes.
     repeat_with_age = repeat_df[repeat_df['age'].notna() & ~repeat_df['age_imputed']].copy()
-    runner_age_stats = repeat_with_age.groupby('display_name')['age'].agg(
-        n_races='count', age_span=lambda s: s.max() - s.min(),
-    )
+    runner_age_stats = repeat_with_age.groupby('display_name')['age'].agg(n_races='count', age_span=lambda s: s.max() - s.min())
     runner_age_stats = runner_age_stats[runner_age_stats['n_races'] > 1]
 
     print(f"\nAge Span (n={len(runner_age_stats)} runners with >=2 age observations):")
@@ -294,7 +275,6 @@ def main():
     print(f"  Span >=5yr: {(runner_age_stats['age_span'] >= 5).sum()}, >=10yr: {(runner_age_stats['age_span'] >= 10).sum()}")
 
     # ICC via the shared metrics module (same formula used in RQ2)
-    from boston_marathon.metrics import icc_anova
     icc = icc_anova(repeat_df, 'display_name', 'seconds')
 
     print(f"\nIntra-class correlation (ICC): {icc:.4f} -- {icc*100:.1f}% of finish time variance is between runners")

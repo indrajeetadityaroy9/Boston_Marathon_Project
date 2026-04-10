@@ -20,6 +20,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import GroupKFold, cross_validate
 from sklearn.preprocessing import StandardScaler
+
 from boston_marathon.metrics import regression_metrics
 
 LINEAR_FEATS = ['age_c', 'female', 'year_c']
@@ -68,13 +69,10 @@ def cross_validate_quadratic(train):
     "cheating" by learning year-specific patterns during training and testing on the
     same year. Reports the RMSE and R-squared for each fold plus the average.
     """
-    cv = cross_validate(LinearRegression(), train[QUAD_FEATS].values, train['seconds'].values,
-                        cv=GroupKFold(n_splits=5), groups=train['year'].values,
-                        scoring=['neg_mean_squared_error', 'r2'])
+    cv = cross_validate(LinearRegression(), train[QUAD_FEATS].values, train['seconds'].values, cv=GroupKFold(n_splits=5), groups=train['year'].values, scoring=['neg_mean_squared_error', 'r2'])
     rmses = np.sqrt(-cv['test_neg_mean_squared_error'])
     r2s = cv['test_r2']
-    return {'fold_rmses': rmses, 'mean_rmse': rmses.mean(), 'std_rmse': rmses.std(),
-            'fold_r2s': r2s, 'mean_r2': r2s.mean(), 'std_r2': r2s.std()}
+    return {'fold_rmses': rmses, 'mean_rmse': rmses.mean(), 'std_rmse': rmses.std(), 'fold_r2s': r2s, 'mean_r2': r2s.mean(), 'std_r2': r2s.std()}
 
 
 def standardized_importance(train):
@@ -88,5 +86,4 @@ def standardized_importance(train):
     """
     X = StandardScaler().fit_transform(train[QUAD_FEATS].values)
     coefs = LinearRegression().fit(X, train['seconds'].values).coef_
-    return sorted([(f, c, 'slower' if c > 0 else 'faster') for f, c in zip(QUAD_FEATS, coefs)],
-                  key=lambda x: abs(x[1]), reverse=True)
+    return sorted(((feat, coef, 'slower' if coef > 0 else 'faster') for feat, coef in zip(QUAD_FEATS, coefs)), key=lambda item: abs(item[1]), reverse=True)

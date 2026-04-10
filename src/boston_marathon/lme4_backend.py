@@ -15,12 +15,12 @@ if 'R_HOME' not in os.environ:
 import numpy as np
 import pandas as pd
 import rpy2.robjects as ro
-from rpy2.robjects.packages import importr
 from rpy2.robjects import conversion, default_converter, numpy2ri, pandas2ri
+from rpy2.robjects.packages import importr
 
 # Set up automatic conversion between pandas/numpy and R data types
 _conv = default_converter + pandas2ri.converter + numpy2ri.converter
-_lme4 = importr('lme4')
+importr('lme4')
 
 
 def fit_lmer(df, formula, reml=True):
@@ -57,13 +57,13 @@ def fit_lmer(df, formula, reml=True):
     ro.r(f'm <- lme4::lmer({formula}, data=df, REML={"TRUE" if reml else "FALSE"})')
 
     # Pull out fixed-effect coefficients and their standard errors
-    fe_names = [str(x) for x in ro.r('names(fixef(m))')]
-    fe_vals = [float(x) for x in ro.r('fixef(m)')]
-    se_vals = [float(x) for x in ro.r('summary(m)$coefficients[,"Std. Error"]')]
+    fe_names = list(map(str, ro.r('names(fixef(m))')))
+    fe_vals = list(map(float, ro.r('fixef(m)')))
+    se_vals = list(map(float, ro.r('summary(m)$coefficients[,"Std. Error"]')))
 
     # Pull out random-effect variances (how much runners differ from each other)
     grp = str(ro.r('names(VarCorr(m))')[0])
-    sd = [float(x) for x in ro.r(f'attr(VarCorr(m)[["{grp}"]], "stddev")')]
+    sd = list(map(float, ro.r(f'attr(VarCorr(m)[["{grp}"]], "stddev")')))
     has_slope = len(sd) > 1
 
     # Residuals: actual finish time minus what the model predicted
@@ -74,7 +74,7 @@ def fit_lmer(df, formula, reml=True):
     ro.r(f'.re <- ranef(m, condVar=FALSE)[["{grp}"]]')
     with conversion.localconverter(_conv):
         blup_df = pd.DataFrame(ro.r('.re'))
-        blup_df.index = [str(x) for x in ro.r('rownames(.re)')]
+        blup_df.index = list(map(str, ro.r('rownames(.re)')))
 
     return {
         'converged': bool(ro.r('is.null(m@optinfo$conv$lme4$messages)')[0]),

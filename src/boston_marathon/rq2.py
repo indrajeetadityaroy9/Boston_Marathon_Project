@@ -25,14 +25,12 @@ Four sensitivity analyses check whether the results are fragile:
   - Survival bias: do runners who quit age differently from those who stay?
 """
 import numpy as np
-import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
 
 from boston_marathon import config as cfg
 from boston_marathon.lme4_backend import fit_lmer
-from boston_marathon.metrics import rmse, boundary_lrt, prediction_interval_width
-from sklearn.metrics import mean_absolute_error
+from boston_marathon.metrics import prediction_interval_width, rmse
 
 # R-syntax formulas for lme4. The part in parentheses defines per-runner parameters:
 #   (1 | runner)           = each runner gets a personal speed offset
@@ -44,6 +42,7 @@ WEATHER_FORMULA = 'seconds ~ age_c + female + year_c + temp_c + humid_c + wind_c
 # Column lists used when building the design matrix for predictions
 _EXOG_COLS = ['age_c', 'female', 'year_c']
 _WEATHER_EXOG_COLS = ['age_c', 'female', 'year_c', 'temp_c', 'humid_c', 'wind_c']
+_WEATHER_COLS = ['temp_c', 'humid_c', 'wind_c']
 
 # lme4 calls the intercept '(Intercept)' but statsmodels calls it 'const'
 _SM_TO_LME4 = {'const': '(Intercept)'}
@@ -75,9 +74,8 @@ def compute_runner_slopes(df):
     34% of runners actually getting faster) is what justifies giving each runner
     their own aging rate in the mixed-effects model.
     """
-    age_grp = df.groupby('display_name')['age']
-    eligible = (age_grp.max() - age_grp.min()) >= 5
-    return _runner_slopes(df, eligible[eligible].index)
+    age_span = df.groupby('display_name')['age'].agg(lambda s: s.max() - s.min())
+    return _runner_slopes(df, age_span[age_span >= 5].index)
 
 
 def _add_weather_cols(df, center_means=None):
@@ -89,13 +87,14 @@ def _add_weather_cols(df, center_means=None):
     to prevent information leakage.
     """
     from boston_marathon.weather import get_race_weather
+
     humidity, wind = get_race_weather()
     df['temp_c'] = (df['year'].map(cfg.RACE_TEMP_F) - 32) * 5 / 9
     df['humid_c'] = df['year'].map(humidity).astype(float)
     df['wind_c'] = df['year'].map(wind)
     if center_means is None:
-        center_means = {col: df[col].mean() for col in ['temp_c', 'humid_c', 'wind_c']}
-    for col in ['temp_c', 'humid_c', 'wind_c']:
+        center_means = {col: df[col].mean() for col in _WEATHER_COLS}
+    for col in _WEATHER_COLS:
         df[col] -= center_means[col]
     return center_means
 
@@ -107,29 +106,13 @@ def fit_mixed_models(df, weather_df=None):
     for reporting) and once with ML (needed for fair likelihood ratio tests).
     If weather_df is provided, also fits the weather-augmented model.
     """
-    m0 = sm.OLS(df['seconds'].values, sm.add_constant(df[_EXOG_COLS])).fit()
-    result = {'m0': m0,
-              'm1_reml': fit_lmer(df, RI_FORMULA, reml=True),
-              'm1_ml': fit_lmer(df, RI_FORMULA, reml=False),
-              'm2_reml': fit_lmer(df, RIRS_FORMULA, reml=True),
-              'm2_ml': fit_lmer(df, RIRS_FORMULA, reml=False)}
-    if weather_df is not None:
-        result['m3_reml'] = fit_lmer(weather_df, WEATHER_FORMULA, reml=True)
-        result['m3_ml'] = fit_lmer(weather_df, WEATHER_FORMULA, reml=False)
+    result = {'m0': sm.OLS(df['seconds'].values, sm.add_constant(df[_EXOG_COLS])).fit()}
+    for prefix, formula, data in (('m1', RI_FORMULA, df), ('m2', RIRS_FORMULA, df), ('m3', WEATHER_FORMULA, weather_df)):
+        if data is None:
+            continue
+        result[f'{prefix}_reml'] = fit_lmer(data, formula, reml=True)
+        result[f'{prefix}_ml'] = fit_lmer(data, formula, reml=False)
     return result
-
-
-def model_comparison_table(m0, m1_ml, m2_ml):
-    """Compare the three nested models to decide which complexity level is justified.
-
-    Returns AIC/BIC for each model (lower is better) and boundary-corrected likelihood
-    ratio tests between each pair. The boundary correction matters because we're testing
-    whether a variance (which can't be negative) is zero — standard tests get this wrong.
-    """
-    rows = [('OLS', 5, m0.llf, m0.aic, m0.bic),
-            ('Rand-Int', 6, m1_ml['loglik'], m1_ml['aic'], m1_ml['bic']),
-            ('Intcpt+Slope', 8, m2_ml['loglik'], m2_ml['aic'], m2_ml['bic'])]
-    return rows, boundary_lrt(m0.llf, m1_ml['loglik'], 1), boundary_lrt(m1_ml['loglik'], m2_ml['loglik'], 2)
 
 
 def export_blups(result, output_path):
@@ -138,10 +121,7 @@ def export_blups(result, output_path):
     RQ3 loads these as features in the checkpoint prediction models, letting it
     incorporate "who this runner is" alongside "how fast they're currently running."
     """
-    blup_df = result['blup_df'].copy()
-    blup_df.columns = ['blup_intercept', 'blup_slope']
-    blup_df.insert(0, 'display_name', blup_df.index)
-    blup_df.reset_index(drop=True, inplace=True)
+    blup_df = result['blup_df'].copy().set_axis(['blup_intercept', 'blup_slope'], axis=1).rename_axis('display_name').reset_index()
     blup_df.to_csv(output_path, index=False)
     return blup_df
 
@@ -156,35 +136,16 @@ def evaluate_personalization(result, y, df, exog_cols=None):
     The difference is the "value of personalization" — the payoff from having
     individual race history. Also computes prediction interval widths for both cases.
     """
-    if exog_cols is None:
-        exog_cols = _EXOG_COLS
+    exog_cols = _EXOG_COLS if exog_cols is None else exog_cols
     exog = sm.add_constant(df[exog_cols])
     marg_pred = exog.values @ _fe_array(result['fe_params'], exog.columns)
     marg_rmse = rmse(y, marg_pred)
     sigma2, tau2_0 = result['sigma2'], result['tau2_0']
-    return {'marg_rmse': marg_rmse, 'cond_rmse': result['cond_rmse'],
-            'personalization': marg_rmse - result['cond_rmse'],
-            'marg_mae': mean_absolute_error(y, marg_pred),
-            'cond_mae': np.mean(np.abs(result['resid'])),
-            'pi_known': prediction_interval_width(sigma2),
-            'pi_new': prediction_interval_width(sigma2, tau2_0)}
-
-
-def _holdout_predictions(result, test_known, test_new, exog_cols):
-    """Generate predictions for the temporal hold-out evaluation.
-
-    For runners seen during training: makes both a population-only prediction
-    (marginal) and a personalized prediction using their stored adjustments (conditional).
-    For brand-new runners: only the population-level prediction is possible.
-    """
-    X_k = sm.add_constant(test_known[exog_cols])
-    fe_vals = _fe_array(result['fe_params'], X_k.columns)
-    marg_k = X_k.values @ fe_vals
-    blup_df = result['blup_df']
-    cond_k = marg_k + blup_df.iloc[:, 0][test_known['display_name']].values + \
-             blup_df.iloc[:, 1][test_known['display_name']].values * test_known['age_c'].values
-    marg_n = sm.add_constant(test_new[exog_cols]).values @ fe_vals
-    return marg_k, cond_k, marg_n
+    return {
+        'marg_rmse': marg_rmse, 'cond_rmse': result['cond_rmse'], 'personalization': marg_rmse - result['cond_rmse'],
+        'marg_mae': np.abs(y - marg_pred).mean(), 'cond_mae': np.abs(result['resid']).mean(),
+        'pi_known': prediction_interval_width(sigma2), 'pi_new': prediction_interval_width(sigma2, tau2_0),
+    }
 
 
 def temporal_holdout(df_full):
@@ -199,6 +160,7 @@ def temporal_holdout(df_full):
     dataset mean would leak information about 2017-2019 weather into the training data.
     """
     from boston_marathon.data import add_centered_features
+
     train_df = df_full[df_full['year'] <= cfg.RQ2_HOLDOUT_MAX_YEAR].copy()
     train_df = train_df[train_df.groupby('display_name')['display_name'].transform('size') > 1].copy()
     test_df = df_full[df_full['year'] > cfg.RQ2_HOLDOUT_MAX_YEAR].copy()
@@ -206,37 +168,43 @@ def temporal_holdout(df_full):
     test_known = test_df[test_df['display_name'].isin(train_runners)].copy()
     test_new = test_df[~test_df['display_name'].isin(train_runners)].copy()
 
-    train_df.sort_values('display_name', inplace=True)
-    train_df.reset_index(drop=True, inplace=True)
-    age_mean_tr = train_df['age'].mean()
-    for d in [train_df, test_known, test_new]:
-        add_centered_features(d, age_mean_tr, cfg.YEAR_CENTER)
+    train_df = train_df.sort_values('display_name').reset_index(drop=True)
+    age_mean = train_df['age'].mean()
+    for frame in (train_df, test_known, test_new):
+        add_centered_features(frame, age_mean, cfg.YEAR_CENTER)
 
     # Base model without weather
     result = fit_lmer(train_df, RIRS_FORMULA, reml=True)
-    marg_k, cond_k, marg_n = _holdout_predictions(result, test_known, test_new, _EXOG_COLS)
+    known_exog = sm.add_constant(test_known[_EXOG_COLS])
+    fe_vals = _fe_array(result['fe_params'], known_exog.columns)
+    known_blups = result['blup_df'].reindex(test_known['display_name'])
+    marg_k = known_exog.values @ fe_vals
+    cond_k = marg_k + known_blups.iloc[:, 0].to_numpy() + known_blups.iloc[:, 1].to_numpy() * test_known['age_c'].to_numpy()
+    marg_n = sm.add_constant(test_new[_EXOG_COLS]).values @ fe_vals
 
     # Weather model — center using training means only to avoid leakage
     train_w = train_df.copy()
     w_means = _add_weather_cols(train_w)
-    for d in [test_known, test_new]:
-        _add_weather_cols(d, center_means=w_means)
+    for frame in (test_known, test_new):
+        _add_weather_cols(frame, center_means=w_means)
     result_w = fit_lmer(train_w, WEATHER_FORMULA, reml=True)
-    marg_k_w, cond_k_w, marg_n_w = _holdout_predictions(result_w, test_known, test_new, _WEATHER_EXOG_COLS)
+    known_w_exog = sm.add_constant(test_known[_WEATHER_EXOG_COLS])
+    fe_vals_w = _fe_array(result_w['fe_params'], known_w_exog.columns)
+    known_w_blups = result_w['blup_df'].reindex(test_known['display_name'])
+    marg_k_w = known_w_exog.values @ fe_vals_w
+    cond_k_w = marg_k_w + known_w_blups.iloc[:, 0].to_numpy() + known_w_blups.iloc[:, 1].to_numpy() * test_known['age_c'].to_numpy()
+    marg_n_w = sm.add_constant(test_new[_WEATHER_EXOG_COLS]).values @ fe_vals_w
 
     export_blups(result, cfg.BLUP_LEAKFREE_CSV)
-    return {'converged': result['converged'],
-            'n_train': len(train_df), 'n_train_runners': train_df['display_name'].nunique(),
-            'n_test': len(test_df), 'n_known': len(test_known), 'n_known_runners': test_known['display_name'].nunique(),
-            'n_new': len(test_new), 'n_new_runners': test_new['display_name'].nunique(),
-            'marg_rmse_known': rmse(test_known['seconds'].values, marg_k),
-            'cond_rmse_known': rmse(test_known['seconds'].values, cond_k),
-            'marg_rmse_new': rmse(test_new['seconds'].values, marg_n),
-            'n_blups_exported': len(result['blup_df']),
-            'w_converged': result_w['converged'],
-            'w_marg_rmse_known': rmse(test_known['seconds'].values, marg_k_w),
-            'w_cond_rmse_known': rmse(test_known['seconds'].values, cond_k_w),
-            'w_marg_rmse_new': rmse(test_new['seconds'].values, marg_n_w)}
+    return {
+        'converged': result['converged'], 'n_train': len(train_df), 'n_train_runners': train_df['display_name'].nunique(),
+        'n_test': len(test_df), 'n_known': len(test_known), 'n_known_runners': test_known['display_name'].nunique(),
+        'n_new': len(test_new), 'n_new_runners': test_new['display_name'].nunique(),
+        'marg_rmse_known': rmse(test_known['seconds'].values, marg_k), 'cond_rmse_known': rmse(test_known['seconds'].values, cond_k),
+        'marg_rmse_new': rmse(test_new['seconds'].values, marg_n), 'n_blups_exported': len(result['blup_df']),
+        'w_converged': result_w['converged'], 'w_marg_rmse_known': rmse(test_known['seconds'].values, marg_k_w),
+        'w_cond_rmse_known': rmse(test_known['seconds'].values, cond_k_w), 'w_marg_rmse_new': rmse(test_new['seconds'].values, marg_n_w),
+    }
 
 
 # Sensitivity analyses
@@ -251,14 +219,15 @@ def sensitivity_weather(df):
     df = df.copy()
     _add_weather_cols(df)
     r = fit_lmer(df, WEATHER_FORMULA, reml=True)
-    year_means = pd.DataFrame({'year': df['year'], 'resid': r['resid']}).groupby('year')['resid'].mean()
+    year_means = df.assign(resid=r['resid']).groupby('year')['resid'].mean()
     fe, se = r['fe_params'], r['fe_se']
-    def _p(name): return 2 * (1 - stats.norm.cdf(abs(fe[name] / se[name])))
-    return {'converged': r['converged'], 'cond_rmse': r['cond_rmse'],
-            'flagged': int((year_means.abs() > 100).sum()), 'year_std': year_means.std(),
-            'temp_coef': fe['temp_c'], 'temp_se': se['temp_c'], 'temp_p': _p('temp_c'),
-            'humid_coef': fe['humid_c'], 'humid_se': se['humid_c'], 'humid_p': _p('humid_c'),
-            'wind_coef': fe['wind_c'], 'wind_se': se['wind_c'], 'wind_p': _p('wind_c')}
+    pvals = {name: 2 * stats.norm.sf(abs(fe[name] / se[name])) for name in _WEATHER_COLS}
+    return {
+        'converged': r['converged'], 'cond_rmse': r['cond_rmse'], 'flagged': int((year_means.abs() > 100).sum()), 'year_std': year_means.std(),
+        'temp_coef': fe['temp_c'], 'temp_se': se['temp_c'], 'temp_p': pvals['temp_c'],
+        'humid_coef': fe['humid_c'], 'humid_se': se['humid_c'], 'humid_p': pvals['humid_c'],
+        'wind_coef': fe['wind_c'], 'wind_se': se['wind_c'], 'wind_p': pvals['wind_c'],
+    }
 
 
 def sensitivity_log(df):
@@ -273,10 +242,7 @@ def sensitivity_log(df):
     df['log_seconds'] = np.log(y_raw)
     r = fit_lmer(df, 'log_seconds ~ age_c + female + year_c + (1 + age_c | display_name)', reml=True)
     smearing = np.mean(np.exp(r['resid']))
-    return {'converged': r['converged'], 'skewness': stats.skew(r['resid']),
-            'kurtosis': stats.kurtosis(r['resid']),
-            'rmse_bt': rmse(y_raw, np.exp(df['log_seconds'].values - r['resid']) * smearing),
-            'smearing_factor': smearing, 'fe_params': r['fe_params']}
+    return {'converged': r['converged'], 'skewness': stats.skew(r['resid']), 'kurtosis': stats.kurtosis(r['resid']), 'rmse_bt': rmse(y_raw, np.exp(df['log_seconds'].values - r['resid']) * smearing), 'smearing_factor': smearing, 'fe_params': r['fe_params']}
 
 
 def sensitivity_spline(df):
@@ -286,11 +252,13 @@ def sensitivity_spline(df):
     freedom. If the spline has much better AIC but similar RMSE, the quadratic
     captures the main trend but misses fine details that don't help prediction.
     """
-    r_s = fit_lmer(df, 'seconds ~ splines::bs(age_c, df=5) + female + year_c + (1 + age_c | display_name)', reml=False)
-    r_q = fit_lmer(df, 'seconds ~ age_c + I(age_c^2) + female + year_c + (1 + age_c | display_name)', reml=False)
-    return {'quad_aic': r_q['aic'], 'quad_bic': r_q['bic'], 'quad_rmse': r_q['cond_rmse'],
-            'spline_aic': r_s['aic'], 'spline_bic': r_s['bic'], 'spline_rmse': r_s['cond_rmse'],
-            'daic': r_s['aic'] - r_q['aic'], 'dbic': r_s['bic'] - r_q['bic']}
+    spline = fit_lmer(df, 'seconds ~ splines::bs(age_c, df=5) + female + year_c + (1 + age_c | display_name)', reml=False)
+    quadratic = fit_lmer(df, 'seconds ~ age_c + I(age_c^2) + female + year_c + (1 + age_c | display_name)', reml=False)
+    return {
+        'quad_aic': quadratic['aic'], 'quad_bic': quadratic['bic'], 'quad_rmse': quadratic['cond_rmse'],
+        'spline_aic': spline['aic'], 'spline_bic': spline['bic'], 'spline_rmse': spline['cond_rmse'],
+        'daic': spline['aic'] - quadratic['aic'], 'dbic': spline['bic'] - quadratic['bic'],
+    }
 
 
 def sensitivity_survival(df):
@@ -301,13 +269,9 @@ def sensitivity_survival(df):
     sample would look artificially healthy (survival bias). A small difference means
     Boston's qualifying standard keeps the sample relatively unbiased.
     """
-    runner_stats = df.groupby('display_name').agg(
-        n_races=('year', 'count'), age_span=('age', lambda s: s.max() - s.min()),
-        last_year=('year', 'max'))
+    runner_stats = df.groupby('display_name').agg(n_races=('year', 'count'), age_span=('age', lambda s: s.max() - s.min()), last_year=('year', 'max'))
     eligible = runner_stats[(runner_stats['n_races'] > 1) & (runner_stats['age_span'] >= 5)]
     sa = _runner_slopes(df, eligible[eligible['last_year'] >= 2017].index)
     sd = _runner_slopes(df, eligible[eligible['last_year'] < 2015].index)
     diff = sa.mean() - sd.mean()
-    return {'n_active': len(sa), 'slope_active': sa.mean(), 'std_active': sa.std(),
-            'n_dropped': len(sd), 'slope_dropped': sd.mean(), 'std_dropped': sd.std(),
-            'diff': diff, 'pct_diff': abs(diff) / sa.mean() * 100}
+    return {'n_active': len(sa), 'slope_active': sa.mean(), 'std_active': sa.std(), 'n_dropped': len(sd), 'slope_dropped': sd.mean(), 'std_dropped': sd.std(), 'diff': diff, 'pct_diff': abs(diff) / sa.mean() * 100}

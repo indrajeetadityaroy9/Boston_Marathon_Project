@@ -10,8 +10,7 @@ to check whether prediction intervals actually contain 90% of finish times.
 """
 import numpy as np
 from scipy import stats
-from sklearn.metrics import (root_mean_squared_error as rmse,
-                             mean_absolute_error, r2_score, mean_absolute_percentage_error)
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, r2_score, root_mean_squared_error as rmse
 
 
 def regression_metrics(y_true, y_pred):
@@ -22,9 +21,7 @@ def regression_metrics(y_true, y_pred):
     seconds and minutes for readable reporting.
     """
     r, mae = rmse(y_true, y_pred), mean_absolute_error(y_true, y_pred)
-    return {'rmse_s': r, 'rmse_min': r / 60, 'mae_s': mae, 'mae_min': mae / 60,
-            'r2': r2_score(y_true, y_pred),
-            'mape': mean_absolute_percentage_error(y_true, y_pred) * 100}
+    return {'rmse_s': r, 'rmse_min': r / 60, 'mae_s': mae, 'mae_min': mae / 60, 'r2': r2_score(y_true, y_pred), 'mape': mean_absolute_percentage_error(y_true, y_pred) * 100}
 
 
 def icc_anova(df, group_col, value_col):
@@ -59,13 +56,11 @@ def variance_decomposition(result, df, fe_param_values):
     (only demographics available). Conditional R-squared tells you how well it
     predicts a runner you've seen before (demographics + their personal history).
     """
-    import statsmodels.api as sm
-    var_fixed = np.var(sm.add_constant(df[['age_c', 'female', 'year_c']]).values @ np.array(fe_param_values))
+    design = np.column_stack([np.ones(len(df)), df['age_c'].to_numpy(), df['female'].to_numpy(), df['year_c'].to_numpy()])
+    var_fixed = np.var(design @ np.asarray(fe_param_values))
     tau2_0, sigma2, var_slope = result['tau2_0'], result['sigma2'], result['tau2_1'] * df['age_c'].var()
     total = var_fixed + tau2_0 + var_slope + sigma2
-    return {'var_fixed': var_fixed, 'tau2_0': tau2_0, 'var_slope': var_slope, 'sigma2': sigma2,
-            'total': total, 'r2_marginal': var_fixed / total,
-            'r2_conditional': (var_fixed + tau2_0 + var_slope) / total}
+    return {'var_fixed': var_fixed, 'tau2_0': tau2_0, 'var_slope': var_slope, 'sigma2': sigma2, 'total': total, 'r2_marginal': var_fixed / total, 'r2_conditional': (var_fixed + tau2_0 + var_slope) / total}
 
 
 def boundary_lrt(llf_restricted, llf_full, df_diff):
@@ -79,8 +74,7 @@ def boundary_lrt(llf_restricted, llf_full, df_diff):
     """
     lr = 2 * (llf_full - llf_restricted)
     p_std = stats.chi2.sf(lr, df=df_diff)
-    p_corr = (0.5 * stats.chi2.sf(lr, df=1) if df_diff == 1
-              else 0.5 * stats.chi2.sf(lr, df=df_diff - 1) + 0.5 * stats.chi2.sf(lr, df=df_diff))
+    p_corr = 0.5 * stats.chi2.sf(lr, df=1) if df_diff == 1 else 0.5 * stats.chi2.sf(lr, df=df_diff - 1) + 0.5 * stats.chi2.sf(lr, df=df_diff)
     return {'lr_stat': lr, 'p_standard': p_std, 'p_corrected': p_corr}
 
 
@@ -94,9 +88,7 @@ def residual_diagnostics(resid, seed=42):
     """
     sample = np.random.default_rng(seed).choice(resid, 5000, replace=False)
     sw_stat, sw_p = stats.shapiro(sample)
-    return {'mean': np.mean(resid), 'std': np.std(resid),
-            'skewness': stats.skew(resid), 'kurtosis': stats.kurtosis(resid),
-            'shapiro_stat': sw_stat, 'shapiro_p': sw_p}
+    return {'mean': np.mean(resid), 'std': np.std(resid), 'skewness': stats.skew(resid), 'kurtosis': stats.kurtosis(resid), 'shapiro_stat': sw_stat, 'shapiro_p': sw_p}
 
 
 def prediction_interval_width(sigma2, tau2_0=None, level=0.90):
