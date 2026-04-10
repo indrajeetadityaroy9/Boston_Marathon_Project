@@ -1,0 +1,20 @@
+[project]
+name = "boston-marathon-prediction"
+version = "0.1.0"
+description = "Three-stage Boston Marathon finish time prediction (MATH 7343)"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.3",
+    "pandas>=2.3",
+    "pingouin>=0.6.1",
+    "pyarrow>=22.0",
+    "requests>=2.33",
+    "rpy2>=3.6",
+    "scikit-learn>=1.8",
+    "scikit-posthocs>=0.12",
+    "scipy>=1.16",
+    "statsmodels>=0.14",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
