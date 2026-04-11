@@ -1,19 +1,17 @@
 """Build one clean CSV from the raw per-year Boston Marathon result files.
 
-The raw files in data/raw/ have different column names and formats across years.
-This script does the following, in order:
+The raw files in data/raw/ use different column names and formats across years.
+This script does the following:
 
-  1. Read every results*.csv file and reshape it to the same 29-column layout
-  2. Turn time strings like "2:45:30" into plain numbers of seconds
-  3. Drop rows with missing gender or out-of-range age
-  4. Fill in missing ages for years that have enough age data to learn from
-  5. Drop non-positive times and exact duplicate rows
-  6. Flag rows where two different runners share a name in the same race
-  7. Drop text columns whose numeric versions already exist (saves ~14 MB)
-  8. Run a handful of sanity checks and crash if any of them fail
-  9. Save one clean file at data/processed/boston_marathon_cleaned.csv
-
-The final output has 28 columns and about 615K rows.
+1. Read each results*.csv file and reshape it to one standard layout
+2. Convert time strings into total seconds
+3. Drop rows with missing gender or invalid age
+4. Impute missing ages for years with enough age data
+5. Drop non-positive times and exact duplicates
+6. Flag rows where different runners share the same name in the same race
+7. Drop text columns that already have numeric versions
+8. Run sanity checks and stop if any fail
+9. Save one clean file at data/processed/boston_marathon_cleaned.csv
 """
 import re
 from pathlib import Path
@@ -41,10 +39,8 @@ UNIFIED_COLS = [
     'projected_time', 'pace_seconds_per_mile',
 ]
 
-# Text columns whose information is already stored numerically elsewhere. These
-# are dropped before writing the output to keep the file small. `official_time`
-# becomes `seconds`, `pace` becomes `pace_seconds_per_mile`, and each split like
-# `5k` becomes `5k_seconds`.
+# Text columns whose values already exist in numeric form.
+# These are dropped before saving the output.
 REDUNDANT_STRING_COLS = ['official_time', 'pace', 'projected_time'] + SPLIT_COLS
 
 NA_VALUES = ['NULL', '', ' ', 'null', 'N/A', 'NA', 'n/a', 'na', '-']
@@ -53,18 +49,18 @@ MARATHON_MILES = 26.2188
 
 
 def parse_time_to_seconds(series):
-    """Turn a column of time strings into a column of total seconds.
+    """Convert time strings into total seconds.
 
-    Handles both `H:MM:SS` format (like `"2:45:30"` for 2 hours 45 minutes
-    30 seconds) and `MM:SS` format (like `"45:30"` for 45 minutes 30 seconds).
-    Empty strings and unparseable values become NaN. Runs on the whole column
-    at once using pandas time parsing, so it's fast even on 600K+ rows.
+    Handles both `H:MM:SS` and `MM:SS` formats.
+    Empty strings and invalid values become NaN.
     """
     values = pd.Series(series, copy=False).astype('string').str.strip()
     values = values.mask(values.eq(''), pd.NA)
-    # `MM:SS` rows get a `"00:"` prefix so pandas can parse them as HH:MM:SS.
+    # Add "00:" to `MM:SS` values so pandas can parse them as HH:MM:SS.
     mm_ss = values.str.fullmatch(r'\d{1,2}:\d{2}')
     normalized = values.mask(mm_ss, '00:' + values)
+    # `errors='coerce'` converts malformed legacy time strings to NaN.
+    # Those rows are removed later if finish time is missing or invalid.
     td = pd.to_timedelta(normalized, errors='coerce')
     return td.dt.total_seconds()
 
@@ -72,34 +68,32 @@ def parse_time_to_seconds(series):
 def load_and_unify(filepath, year):
     """Read one year's raw CSV and reshape it to the standard column layout.
 
-    Different years use different column names and orderings. This function:
-      - Reads the file, treating a few standard missing-value tokens as NaN.
-      - Stamps the given `year` on every row.
-      - Fixes a known typo in newer files (`contry_citizenship` -> `country_citizenship`).
-      - Builds a combined `residence` string from city/state/country where those
-        columns exist separately (newer files have them split out).
-      - Drops every column not in `UNIFIED_COLS` and adds any missing ones as NaN,
-        so every year's DataFrame comes out with the same 29-column shape.
+    Different years use different column names and formats. This function:
+    - reads the file with standard missing-value tokens
+    - adds the `year` column
+    - fixes a known typo in newer files
+    - builds `residence` from city/state/country when needed
+    - keeps only `UNIFIED_COLS` and fills missing columns with NaN
 
-    `on_bad_lines='skip'` tells pandas to drop rows whose quoting is broken.
-    One raw file (results2019.csv) has a stray backslash-quote on one line that
-    the CSV parser can't handle. This is the only place in the whole script
-    that silently skips bad input.
+    `on_bad_lines='skip'` drops rows with broken CSV formatting.
     """
     df = pd.read_csv(filepath, na_values=NA_VALUES, dtype='string', on_bad_lines='skip')
     df.columns = df.columns.str.strip().str.strip('"')
     df['year'] = year
 
-    # Newer files (post-2001) have a `place_overall` column, split city/state/
-    # country fields, and sometimes a misspelled citizenship column. Detecting
-    # `place_overall` is how newer files are identified.
-    if 'place_overall' in df.columns:
-        if 'contry_citizenship' in df.columns:
-            df = df.rename(columns={'contry_citizenship': 'country_citizenship'})
-        address_parts = df[['city', 'state', 'country_residence']].astype('string').apply(lambda col: col.str.strip()).replace('', pd.NA)
-        df['residence'] = address_parts.stack(future_stack=True).dropna().groupby(level=0).agg(', '.join).reindex(df.index)
-        if 'name' in df.columns and 'display_name' not in df.columns:
-            df = df.rename(columns={'name': 'display_name'})
+    # Modern files have separate city/state/country columns and a known typo.
+    # Older files already store residence in one column.
+    if year >= 2015:
+        df = df.rename(columns={'contry_citizenship': 'country_citizenship'})
+        address_parts = (df[['city', 'state', 'country_residence']]
+                         .astype('string')
+                         .apply(lambda col: col.str.strip())
+                         .replace('', pd.NA))
+        df['residence'] = (address_parts.stack(future_stack=True)
+                           .dropna()
+                           .groupby(level=0)
+                           .agg(', '.join)
+                           .reindex(df.index))
 
     df = df.reindex(columns=UNIFIED_COLS, fill_value=pd.NA)
     text_like_cols = [col for col in UNIFIED_COLS if col != 'year']
@@ -109,27 +103,35 @@ def load_and_unify(filepath, year):
 
 
 def clean_types(df):
-    """Convert text columns into numbers and parse time strings into seconds.
+    """Convert text columns to numeric form and parse times into seconds.
 
-    Every column is still a string at this point. This function:
-      - Strips whitespace from text columns and turns blank strings into NaN.
-      - Casts age, finishing places, and bib numbers to numeric dtypes.
-      - Casts the main finish time (`seconds`) to a nullable float.
-      - Adds a temporary `_official_time_seconds` column by parsing the
-        `official_time` string (used later as a backup for `seconds`).
-      - Adds a `pace_seconds_per_mile` column by parsing the `pace` string.
-      - Adds a `<split>_seconds` column for each of the nine checkpoint splits.
-
-    The raw text time columns are still present after this step; they get
-    dropped at the end of `main()` once they are no longer needed.
+    This function:
+    - strips whitespace and converts blank strings to NaN
+    - parses `overall`, `gender_result`, `division_result`, and `seconds`
+    - parses `age` with bounded tolerance for a few invalid rows
+    - keeps `bib` as a string column
+    - parses `official_time` into `_official_time_seconds`
+    - parses `pace` into `pace_seconds_per_mile`
+    - parses each split into a `<split>_seconds` column
     """
     str_cols = df.select_dtypes(include='string').columns
     df[str_cols] = df[str_cols].apply(lambda c: c.str.strip()).replace(r'^\s*$', pd.NA, regex=True)
 
-    numeric_cast_cols = ['age', 'overall', 'gender_result', 'division_result', 'bib']
-    df[numeric_cast_cols] = df[numeric_cast_cols].apply(pd.to_numeric, errors='coerce')
-    df['seconds'] = pd.to_numeric(df['seconds'], errors='coerce').astype('Float64')
+    # Parse numeric result columns. Unexpected non-numeric values should fail.
+    for col in ['overall', 'gender_result', 'division_result']:
+        df[col] = pd.to_numeric(df[col])
+    df['seconds'] = pd.to_numeric(df['seconds']).astype('Float64')
 
+    # Parse age and allow only a very small number of invalid age values.
+    pre_age_na = int(df['age'].isna().sum())
+    df['age'] = pd.to_numeric(df['age'], errors='coerce')
+    unexpected_age_na = int(df['age'].isna().sum()) - pre_age_na
+    assert unexpected_age_na <= 5, (
+        f"Expected at most 5 non-numeric age values across all raw files, "
+        f"found {unexpected_age_na}. Investigate raw data."
+    )
+
+    # Keep `bib` as string because values like 'F1' and 'F11' are valid.
     df['_official_time_seconds'] = parse_time_to_seconds(df['official_time'])
     df['pace_seconds_per_mile'] = parse_time_to_seconds(df['pace'])
     df = df.assign(**{f'{c}_seconds': parse_time_to_seconds(df[c]) for c in SPLIT_COLS})
@@ -138,39 +140,25 @@ def clean_types(df):
 
 
 def impute_age(df, *, random_state=42, min_validity=0.50):
-    """Fill in missing ages for years that have enough real ages to learn from.
+    """Impute missing ages for years with enough observed age data.
 
-    For each race year where at least half the rows already have an age AND at
-    least one row is missing one, a small Bayesian linear regression is fit
-    that predicts age from finish time and gender on that year's data, then
-    the missing ages are filled in by *drawing* from the regression's
-    posterior distribution. Drawing — instead of always taking the single
-    best-guess prediction — keeps the spread of imputed ages close to the
-    spread of real ages. A simpler nearest-neighbour imputer would pull
-    every imputed age toward the local mean and collapse the variance.
+    For each eligible year, fit a per-year MICE model using finish time and
+    gender to predict age. Posterior sampling helps preserve the age
+    distribution better than a single-point prediction.
 
-    A separate model is fit per year on purpose. Finish times drift year to
-    year (course changes, participation policies, weather), and a single
-    global model would confuse that year-to-year drift for within-year spread
-    and produce imputed ages with inflated variance.
-
-    After filling in values, the function prints a per-year diagnostic: the
-    ratio of (std of imputed ages) to (std of real ages). A ratio near 1.0
-    means the natural spread was preserved well.
+    A per-year model avoids mixing year-to-year drift into the imputation.
 
     Parameters:
       random_state   seed for reproducible posterior draws
-      min_validity   minimum fraction of non-missing ages a year must have
-                     before it is trusted as training data for itself
+      min_validity   minimum fraction of non-missing ages required for a year
     """
     df['age_imputed'] = False
 
-    # Fraction of rows in each year that already have an age.
+    # Fraction of rows in each year that already have age values.
     age_validity = df.groupby('year')['age'].count() / df.groupby('year')['age'].size()
     eligible_years = age_validity[age_validity >= min_validity].index
 
-    # Keep only the years that (a) are eligible AND (b) actually contain at least
-    # one missing age. Years that are fully populated or fully empty need nothing.
+    # Keep only years that are eligible and still have missing ages.
     years_needing_imputation = [
         year for year in eligible_years
         if df.loc[df['year'] == year, 'age'].isna().any()
@@ -192,13 +180,11 @@ def impute_age(df, *, random_state=42, min_validity=0.50):
 
     for year in years_needing_imputation:
         year_mask = df['year'] == year
-        # Build the training subset: rows from this year that have both a
-        # finish time and a gender (so the regression has inputs to work with).
+        # Use rows from this year with valid predictors.
         sub = df.loc[year_mask & df[context_features].notna().all(axis=1), feature_cols].copy()
         missing_idx = sub.index[sub['age'].isna()]
 
-        # Standardise `seconds`, encode gender as 0/1, leave `age` as-is. The
-        # imputer will fit a Bayesian regression and draw ages for NaN rows.
+        # Standardize `seconds`, encode gender, and impute `age`.
         preprocess = ColumnTransformer(transformers=[
             ('age', 'passthrough', ['age']),
             ('num', StandardScaler(), ['seconds']),
@@ -206,14 +192,13 @@ def impute_age(df, *, random_state=42, min_validity=0.50):
         ], verbose_feature_names_out=False).set_output(transform='pandas')
         imputer = IterativeImputer(sample_posterior=True, random_state=random_state, max_iter=10)
         pipe = Pipeline([('pre', preprocess), ('imp', imputer)]).set_output(transform='pandas')
-        # Clamp imputed ages to a plausible range before rounding to integers.
+        # Clamp imputed ages to a plausible range before rounding.
         imputed_col = pipe.fit_transform(sub)['age'].clip(lower=14, upper=90)
 
         df.loc[missing_idx, 'age'] = imputed_col.loc[missing_idx].round().astype(int)
         df.loc[missing_idx, 'age_imputed'] = True
 
-        # Per-year variance check. If the ratio is much below 1, the imputer
-        # is regressing toward the mean and the imputed values look too uniform.
+        # Per-year variance diagnostic.
         real = df.loc[year_mask & ~df['age_imputed'] & df['age'].notna(), 'age']
         imp = df.loc[missing_idx, 'age']
         ratio = imp.std(ddof=1) / real.std(ddof=1) if len(real) > 1 and len(imp) > 1 else float('nan')
@@ -223,35 +208,21 @@ def impute_age(df, *, random_state=42, min_validity=0.50):
 
 
 def mark_within_year_collisions(df):
-    """Flag rows where two different runners share the same name in the same race.
+    """Flag rows where different runners share the same name in the same race.
 
-    Common names like "Aaron Smith" sometimes belong to more than one person in
-    the same Boston Marathon — about 3,419 such (year, name) groups affecting
-    7,374 rows in this dataset. Without a flag, per-runner analyses would treat
-    these rows as one person and compute nonsense year-over-year slopes across
-    different people.
-
-    This adds a boolean column `name_collides_within_year` that is True for any
-    row whose (year, display_name) pair appears more than once, using pandas'
-    canonical `DataFrame.duplicated(keep=False)` idiom. `keep=False` marks every
-    member of a duplicate group, not just the second and later ones.
+    Adds a boolean column `name_collides_within_year` that is True when a
+    `(year, display_name)` pair appears more than once.
     """
     df['name_collides_within_year'] = df.duplicated(subset=['year', 'display_name'], keep=False)
     return df
 
 
 def assert_invariants(df):
-    """Run a handful of sanity checks. Any failure crashes the script.
+    """Run sanity checks. Any failure stops the script.
 
-    These are the properties every downstream analysis assumes to hold. If an
-    assertion fires, either the raw data has a new problem not seen before
-    or the cleaning logic regressed. Either way, execution should stop here
-    rather than silently pass broken data on to the modelling step.
+    These checks validate the assumptions used by downstream analysis.
     """
-    # Convert `seconds` to a numpy array before comparing. The column has the
-    # pandas nullable `Float64` dtype, and on that dtype `Series.gt(0).all()`
-    # quietly skips any NaN rows — a missing finish time would pass the check.
-    # numpy treats `np.nan > 0` as False, so any NaN correctly fails the check.
+    # Convert `seconds` to numpy so NaN values fail the comparison.
     seconds_np = df['seconds'].to_numpy()
     assert (seconds_np > 0).all(), "seconds must be strictly positive (and not NA)"
     assert (seconds_np < 50_000).all(), f"seconds exceeds 50,000 (>13h, absurd): {(seconds_np >= 50_000).sum()} rows"
@@ -259,9 +230,7 @@ def assert_invariants(df):
     age_ok = df['age'].isna() | df['age'].between(14, 90)
     assert age_ok.all(), f"age out of [14,90]: {(~age_ok).sum()} rows"
 
-    # Finishing places have to nest: a runner's division place can't be higher
-    # than their gender place, and their gender place can't be higher than
-    # their overall place. Rows where either column is NaN are skipped.
+    # Finishing places must nest correctly.
     place_ok = (df['gender_result'].isna() | df['overall'].isna() |
                 (df['gender_result'] <= df['overall']))
     assert place_ok.all(), f"gender_result > overall: {(~place_ok).sum()} rows"
@@ -269,17 +238,7 @@ def assert_invariants(df):
               (df['division_result'] <= df['gender_result']))
     assert div_ok.all(), f"division_result > gender_result: {(~div_ok).sum()} rows"
 
-    # Runners can only move forward on the course, so each split time must be
-    # strictly larger than the previous one (5k < 10k < 15k < ... < 40k) and
-    # the 40k split must be smaller than the final finish time. Only rows
-    # that have every checkpoint filled in are checked, which in practice
-    # means the 2015-2017 finishers.
-    #
-    # The check uses pandas' canonical `DataFrame.diff(axis=1)`, which
-    # computes each cell's value minus the cell to its left. For a strictly
-    # increasing row every post-diff cell must be positive; any cell ≤ 0 is
-    # a violation of the split/finish ordering. This one vectorised call
-    # covers all 10 transitions (5k→10k→...→40k→seconds) at once.
+    # Split times must be strictly increasing, and 40k must be less than finish time.
     split_seconds_cols = [f'{c}_seconds' for c in SPLIT_COLS]
     sp = df[df[split_seconds_cols].notna().all(axis=1)]
     full_sequence = sp[split_seconds_cols + ['seconds']]
@@ -296,9 +255,7 @@ def assert_invariants(df):
 def main():
     print("Boston Marathon Data Cleaning")
 
-    # Collect every `results*.csv` in data/raw/, skipping the wheelchair and
-    # diverted-course variants (which are not included in the final dataset).
-    # Each entry of `manifest` is a (file path, year) pair.
+    # Collect each `results*.csv` file, excluding wheelchair and diverted-course variants.
     manifest = [
         (path, int(match.group(1)))
         for path in sorted(DATA_DIR.glob('results*.csv'))
@@ -313,30 +270,24 @@ def main():
 
     df = clean_types(df)
 
-    # Some rows have no `seconds` column but do have an `official_time` string.
-    # Use the parsed version of `official_time` as a backup when `seconds` is
-    # missing. Then compute `pace_seconds_per_mile` for any row where the pace
-    # string was absent or unparseable.
+    # Fill missing `seconds` from parsed `official_time`.
+    # Then fill missing pace from finish time and marathon distance.
     df['seconds'] = df['seconds'].astype('Float64').combine_first(df['_official_time_seconds'].astype('Float64'))
     df = df.drop(columns=['_official_time_seconds'])
     df['pace_seconds_per_mile'] = df['pace_seconds_per_mile'].fillna(df['seconds'] / MARATHON_MILES)
 
-    # Drop rows whose gender is not "M" or "F". Raw files sometimes contain
-    # blanks, "U", "X", or stray whitespace. Upper-case and strip whitespace
-    # first so spelling differences don't survive the filter.
+    # Keep only M/F gender values after cleaning spacing and case.
     df['gender'] = df['gender'].astype('string').str.strip().str.upper()
     n_before_gender = len(df)
     df = df[df['gender'].isin(['M', 'F'])].copy()
     print(f"  Gender filter (keep M/F): {n_before_gender:,} -> {len(df):,} ({n_before_gender-len(df):,} dropped)")
 
-    # Treat age = 0 and ages outside 14-90 as missing, so the age imputer
-    # can fill in plausible values for those rows later.
+    # Treat age 0 and ages outside 14-90 as missing.
     df['age'] = df['age'].replace(0, np.nan).where(df['age'].between(14, 90))
 
     df = impute_age(df)
 
-    # Drop rows with a non-positive or missing finish time, and any exact-
-    # duplicate rows (identical across every column).
+    # Drop rows with non-positive or missing finish time, then remove exact duplicates.
     n_before_valid = len(df)
     df = df[~(df['seconds'] <= 0)].drop_duplicates()
     print(f"  Non-positive seconds + duplicate filter: {n_before_valid:,} -> {len(df):,} ({n_before_valid-len(df):,} dropped)")
@@ -347,10 +298,8 @@ def main():
     collide_groups = df[df['name_collides_within_year']].groupby(['year', 'display_name']).ngroups
     print(f"  Within-year name collision flag: {n_collide:,} rows in {collide_groups:,} distinct (year, display_name) groups")
 
-    # Drop the text copies of times and splits. Their numeric versions are all
-    # present (`5k_seconds` replaces `5k`, `seconds` replaces `official_time`,
-    # and `pace_seconds_per_mile` replaces `pace`). Saves about 14 MB on disk.
-    df = df.drop(columns=[c for c in REDUNDANT_STRING_COLS if c in df.columns])
+    # Drop text time columns after numeric versions are available.
+    df = df.drop(columns=list(REDUNDANT_STRING_COLS))
     print(f"  Dropped redundant string columns: {REDUNDANT_STRING_COLS}")
 
     assert_invariants(df)
@@ -358,14 +307,6 @@ def main():
     OUTPUT_DIR.mkdir(exist_ok=True)
     output_path = OUTPUT_DIR / 'boston_marathon_cleaned.csv'
     df.to_csv(output_path, index=False)
-
-    # Delete the parquet cache if one exists. The next downstream script that
-    # wants the cleaned data will read this fresh CSV and rebuild the cache
-    # on its own the first time.
-    parquet_cache = OUTPUT_DIR / 'boston_marathon_cleaned.parquet'
-    if parquet_cache.exists():
-        parquet_cache.unlink()
-        print(f"  Invalidated stale parquet cache: {parquet_cache.name}")
 
     size_mb = output_path.stat().st_size / 1e6
     print(f"  Saved cleaned data to {output_path} ({len(df):,} rows, {len(df.columns)} columns, {size_mb:.1f} MB)")
