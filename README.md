@@ -1,124 +1,102 @@
-# Boston Marathon Finish Time Prediction (MATH 7343)
+# Information Decomposition of Marathon Finish-Time Prediction
 
-A multi-scale prediction framework for Boston Marathon finish times, progressively incorporating demographic, longitudinal, and in-race information. Uses 615,682 finisher records from 1897-2019.
+## Abstract
 
-## Research Questions
+This project measures how much four information sources each improve marathon finish-time prediction: pre-race demographics, prior Boston Marathon history, runner-specific random effects, and in-race split times. Six nested models (M0-M5) are compared on a common held-out test set with BCa cluster-bootstrap confidence intervals. Main findings: (1) prior race history gives the largest pre-race gain; (2) runner random effects help, but only modestly; (3) a single early checkpoint (5 km) already beats all pre-race models; (4) all prediction intervals undercover on held-out years due to temporal distribution shift, and honest recalibration does not fully fix this.
 
-- **RQ1 (Pre-race demographic prediction):** How accurately can finish time be predicted from age, gender, and year alone? Demographics explain only 17% of the variation in finish times (test RMSE = 2,504s, roughly 42 minutes of error). However, for runners who have raced Boston before, adding their average prior finish time cuts the error nearly in half (RMSE = 1,812s, R² = 0.51). This shows that a runner's individual history is a far stronger predictor than their demographics.
+A single deterministic pipeline fits four stages on data up to 2016 and evaluates everything on a common 2017 test set.
 
-- **RQ2 (Pre-race personalized prediction):** For repeat runners, how much does building a statistical model of each individual runner improve prediction? A mixed-effects model gives each runner their own baseline ability and aging rate. When evaluated on the same data it was trained on (in-sample), this model predicts within about 17 minutes (RMSE = 996s). When honestly tested on future years it has never seen (out-of-sample), the error rises to about 27 minutes (RMSE = 1,593s). The gap between knowing the runner's history (1,593s) versus not knowing it (2,244s) is about 11 minutes — the concrete value of personalization.
+**Stage 1** fits HC3-robust OLS on log(seconds) with Duan (1983) smearing to convert predictions back to seconds. Two feature sets: demographics alone (age, gender, year, interactions) and demographics plus leak-free prior history (expanding-window mean time, log appearances).
 
-- **RQ3 (In-race progressive prediction):** Once the race starts, how quickly does prediction improve as runners pass each checkpoint? Using Ridge regression on checkpoint split times, the error drops from about 21 minutes at the 5K mark (RMSE = 1,259s) to about 13 minutes at halfway (RMSE = 760s) to just 2 minutes near the finish at 40K (RMSE = 124s). At early checkpoints (5K, 10K), knowing a runner's past race history gives a better prediction than knowing their current split time. But by 15K, the accumulating split data becomes more informative than the runner's historical profile — this is the crossover point.
+**Stage 2** fits a linear mixed-effects model via `lme4::lmer` (Bates et al., 2015) on log(seconds) with REML, using a random intercept and random age slope per runner. This captures how individual runners differ from the population trend. Only pre-2017 data is used; the resulting best linear unbiased predictors of the random effects are exported for later stages. The model assumes normal random effects following standard practice; Vu et al. (2024) analyze the consequences of this assumption for prediction.
 
-## Setup
+**Stage 3** fits ridge regression (Hoerl and Kennard, 1970) at each of nine cumulative checkpoints (5K through 40K), predicting raw seconds from cumulative splits plus demographics. The regularization parameter is chosen by generalized cross-validation.
 
-### Install dependencies
+**Evaluation** compares all six models (M0-M5) on one common 2017 test subset with paired BCa cluster-bootstrap confidence intervals (Efron, 1987), clustering by runner to handle repeat participants. Improvements are reported in seconds and scaled by the year-drift reference (median absolute year-over-year shift in mean finish time). Two supplementary analyses address subgroup claims the population-averaged table cannot capture: the runner-effects contribution (do predicted random effects help on top of 5K splits?) and the never-seen subgroup (do splits work for runners with no prior Boston data?).
 
-```bash
-pip install pandas numpy scikit-learn scipy statsmodels scikit-posthocs matplotlib
-```
+**Calibration** checks whether prediction intervals hold up under temporal distribution shift, using split conformal quantile regression (Romano et al., 2019). All methods undercover on held-out years. A K-S test on conformity scores pinpoints the cause, and honest temporal recalibration experiments measure the remaining gap.
 
-The raw CSV files are included in `data/` (sourced from [adrian3/Boston-Marathon-Data-Project](https://github.com/adrian3/Boston-Marathon-Data-Project)). Wheelchair and diverted variants are automatically skipped during cleaning.
+## Nested Model Comparison
 
-## Running the Pipeline
+| Stage | Model | Information Added |
+|-------|-------|-------------------|
+| M0 | Mean baseline | None (training grand mean) |
+| M1 | + demographics | Age, gender, year, age-gender interactions |
+| M2 | + prior history | Expanding-window mean time, log prior appearances |
+| M3 | + runner effects | Best linear unbiased predictors (random intercept + random age slope) |
+| M4 | + 5K splits | Cumulative split seconds through the 5 km checkpoint |
+| M5 | + 40K splits | Cumulative split seconds through the 40 km checkpoint |
 
-Scripts run from the project root. Steps 1-2 are prerequisites. Steps 3-4 can run in parallel. Step 5 depends on Step 4.
+All models train on data up to 2016 and are tested on a common 2017 subset (runners with complete 9-checkpoint splits). M0-M3 predict log(seconds) with Duan smearing; M4-M5 predict raw seconds via ridge regression.
 
-### Step 1: Clean the data
+## References
 
-```bash
-python data_scripts/01_data_cleaning.py
-```
+- **Duan (1983).** *Smearing estimate: a nonparametric retransformation method.* JASA 78(383). Corrects bias when converting log-scale predictions back to the original scale. Used in Stages 1-3.
 
-Reads all CSVs from `data/`, unifies them into a single schema, parses times, cleans gender and age values, imputes missing ages via KNN, validates, and writes `cleaned_data/boston_marathon_cleaned.csv` (615,682 rows, 39 columns).
+- **MacKinnon & White (1985).** *Some heteroskedasticity-consistent covariance matrix estimators with improved finite sample properties.* J. Econometrics 29(3). HC3 robust standard errors for pre-race regression, avoiding homoskedasticity assumptions.
 
-### Step 2: Feature discovery EDA
+- **Efron (1987).** *Better bootstrap confidence intervals.* JASA 82(397). BCa bootstrap for second-order accurate confidence intervals. Extended here to cluster resampling to handle within-runner correlation.
 
-```bash
-python data_scripts/02_feature_discovery_eda.py
-```
+- **Hoerl & Kennard (1970).** *Ridge regression: biased estimation for nonorthogonal problems.* Technometrics 12(1). Ridge regression with GCV regularization for checkpoint-based split prediction.
 
-Seven analysis sections feeding into the prediction pipeline:
+- **Bates, Machler, Bolker, & Walker (2015).** *Fitting linear mixed-effects models using lme4.* J. Stat. Softw. 67(1). The runner mixed-effects model is fit via `lme4::lmer` through the `rpy2` bridge. Profile likelihood CIs on variance components follow the methods in this package.
 
-1. **Descriptive statistics** — center, spread, shape by gender and decade
-2. **Normality tests** — Shapiro-Wilk on raw and log-transformed times
-3. **Correlation analysis** — Pearson, Spearman, partial correlation (age vs finish time controlling for gender)
-4. **Gender comparison** — Welch's t-test, Mann-Whitney U, Hedges' g effect size, decade trend
-5. **Age group analysis** — Kruskal-Wallis, ANOVA with eta-squared, Tukey HSD, Dunn's post-hoc
-6. **Split-time analysis** — checkpoint correlation matrix (2015-2017), pacing classification
-7. **Repeat runner profiling** — name collision filtering, ICC, within-runner aging slopes
+- **Romano, Patterson, & Candes (2019).** *Conformalized quantile regression.* NeurIPS 32. Split-CQR gives distribution-free prediction intervals with finite-sample coverage guarantees under exchangeability. Used here to build 90% intervals at each checkpoint and to diagnose coverage loss under temporal shift.
 
-### Step 3: Demographic baseline prediction (RQ1)
+- **Vu, Hui, Muller, & Welsh (2024).** *Random effects misspecification and its consequences for prediction in GLMMs.* arXiv:2411.19384. Shows that assuming normal random effects affects best linear unbiased predictors and mean squared prediction errors even when fixed-effect estimates stay consistent. The M2-vs-M3 comparison here empirically measures the practical value of this modeling choice.
 
-```bash
-python data_scripts/03_rq1_demographic_baseline.py
-```
+## Requirements
 
-Fits three OLS models on the 2000+ non-imputed sample (n=427,258):
-
-- **Linear OLS:** finish_time ~ centered_age + female + centered_year
-- **Quadratic OLS:** adds centered_age² + age×female interaction
-- **History OLS:** adds prior_appearances + prior_mean_time (repeat runners only, n=19,636 in test)
-
-Temporal hold-out: train on 2000-2017, test on 2018-2019. Includes 5-fold cross-validation grouped by year and standardized feature importance.
-
-### Step 4: Personalized mixed-effects prediction (RQ2)
+- Python >= 3.14
+- R with the `lme4` package
 
 ```bash
-python data_scripts/04_rq2_personalized_mixed_effects.py
+uv sync
 ```
 
-Fits three nested models on 188,310 observations from 65,590 repeat runners (2000-2019):
-
-- **OLS baseline:** no random effects
-- **Random intercept:** per-runner baseline offset (captures individual ability)
-- **Random intercept + slope:** per-runner aging rate (captures individual aging)
-
-Includes ICC computation, likelihood ratio tests with boundary correction, Nakagawa-Schielzeth variance decomposition, residual diagnostics, and per-runner predicted offset export. Reports both in-sample and out-of-sample (temporal hold-out: train 2000-2016, test 2017-2019) evaluation.
-
-### Step 5: Progressive checkpoint prediction (RQ3)
+## Reproducing Results
 
 ```bash
-python data_scripts/05_rq3_progressive_checkpoint.py
+uv run scripts/run.py
 ```
 
-At each of 9 checkpoints (5K through 40K), fits Ridge regression models on 79,038 runners (train 2015-2016, test 2017):
+This runs every stage, the nested comparison, calibration diagnostics, and writes all figures, tables, and metrics. Takes roughly 15-20 minutes (mostly the `lme4` fit and BCa bootstrap).
 
-- **Naive baseline:** constant-pace extrapolation
-- **Splits-only Ridge:** cumulative checkpoint times
-- **Splits + demographics Ridge:** adds age and gender
-- **Full Ridge:** adds per-runner predicted offsets from RQ2 (leak-free, 30% coverage)
+To rebuild the processed dataset from raw CSVs (only needed if the raw data changes):
 
-Produces a prediction convergence curve and crossover analysis identifying where splits outperform personalized history (~15K).
+```bash
+uv run scripts/preprocess.py
+```
 
-## Cleaned Data Dictionary
+To run the supplementary exploratory data analysis:
 
-`cleaned_data/boston_marathon_cleaned.csv` — 615,682 rows, 39 columns.
+```bash
+uv pip install -e ".[eda]"
+uv run scripts/supplementary/eda.py
+```
 
-| Column | Type | Description |
-|---|---|---|
-| `year` | int | Race year (1897-2019) |
-| `display_name` | string | Runner's full display name |
-| `first_name` | string | First name (null for some legacy years) |
-| `last_name` | string | Last name (null for some legacy years) |
-| `age` | float | Runner's age; null for years lacking age data |
-| `gender` | string | `M` or `F` |
-| `residence` | string | Combined city, state, country string (post-~2001 only) |
-| `city` | string | City of residence (post-~2001 only) |
-| `state` | string | State of residence (post-~2001 only) |
-| `country_residence` | string | Country of residence (post-~2001 only) |
-| `country_citizenship` | string | Country of citizenship (post-~2001 only) |
-| `bib` | float | Bib number (post-~2001 only) |
-| `pace` | string | Pace as original time string (e.g. `7:08`) |
-| `official_time` | string | Official finish time string (e.g. `2:55:10`) |
-| `seconds` | float | Finish time in seconds |
-| `overall` | int | Overall finishing place |
-| `gender_result` | int | Finishing place within gender |
-| `division_result` | int | Finishing place within age division |
-| `5k`-`40k` | string | Original checkpoint time strings (2015-2017 only) |
-| `half` | string | Original half-marathon time string (2015-2017 only) |
-| `projected_time` | string | Projected finish time (2015-2017 only) |
-| `pace_seconds_per_mile` | float | Pace in seconds per mile |
-| `5k_seconds`-`40k_seconds` | float | Checkpoint times in seconds (2015-2017 only) |
-| `half_seconds` | float | Half-marathon time in seconds (2015-2017 only) |
-| `age_imputed` | bool | `True` if age was filled in by KNN imputation |
+## Reproducibility
+
+The pipeline is fully deterministic:
+
+- **Seeds:** `np.random.default_rng(0).spawn(N)` gives each stage its own RNG stream. Execution order does not matter.
+- **Splits:** All train/test boundaries are year-based, defined in `config.py`. No random splitting.
+- **Ridge:** `RidgeCV(cv=None)` uses generalized cross-validation (deterministic).
+- **Identical output:** Running the pipeline twice produces the same `pipeline_metrics.json`, figures, and tables.
+
+## Claim-to-Code Mapping
+
+| Claim | Evidence | Module | Output |
+|-------|----------|--------|--------|
+| Demographics explain coarse variation | M0 -> M1 | `regression.py` | `tab_ablation.tex` |
+| Prior history is the largest pre-race gain | M1 -> M2 | `regression.py` | `tab_ablation.tex`, `fig1_ablation.pdf` |
+| Runner effects add modest further value | M2 -> M3 | `mixed_effects.py` | `tab_ablation.tex` |
+| 5K splits beat all pre-race models | M3 -> M4 | `splits.py` | `tab_ablation.tex`, `fig2_checkpoint_rmse.pdf` |
+| Runner effects are subsumed by splits | Runner-effects supplement | `inference.py` | `pipeline_metrics.json` |
+| Splits work for runners with no prior data | Never-seen supplement | `inference.py` | `pipeline_metrics.json` |
+| Intervals undercover under temporal shift | Coverage diagnostic | `calibration.py` | `tab_coverage.tex`, `fig3_coverage.pdf` |
+| Recalibration does not fully restore coverage | Recalibration experiments | `calibration.py` | `tab_recalibration.tex`, `fig4_conformity_shift.pdf` |
+
+## License
+
+Research code for academic use.
