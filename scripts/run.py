@@ -2,15 +2,15 @@
 import json
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import pandas as pd
 from scipy.stats import skew
 from sklearn.metrics import root_mean_squared_error as rmse
 
-from boston_marathon import config, splits, ablation, regression, data, mixed_effects, calibration, figures, tables
-from boston_marathon.inference import bootstrap_rmse_comparison
+from src import config, splits, ablation, regression, data, mixed_effects, calibration, figures, tables
+from src.inference import bootstrap_rmse_comparison
 
 
 def spawn_rngs():

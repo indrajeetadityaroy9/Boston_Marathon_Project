@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from boston_marathon import config
+from . import config
 
 
 def load_processed_results(columns=None):

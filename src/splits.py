@@ -5,8 +5,8 @@ import statsmodels.api as sm
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import root_mean_squared_error as rmse
 
-from boston_marathon import config
-from boston_marathon.inference import fit_split_cqr
+from . import config
+from .inference import fit_split_cqr
 
 IN_RACE_DEMOGRAPHIC_FEATURES = ['age', 'female']
 

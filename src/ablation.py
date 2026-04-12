@@ -4,11 +4,11 @@ import pandas as pd
 import statsmodels.api as sm
 from sklearn.metrics import root_mean_squared_error as rmse
 
-from boston_marathon import config
-from boston_marathon.inference import compute_bca_cluster_bootstrap_interval
-from boston_marathon.regression import PRE_RACE_DEMOGRAPHIC_AND_HISTORY_FEATURES, PRE_RACE_DEMOGRAPHIC_FEATURES
-from boston_marathon.data import add_centered_pre_race_features, add_prior_boston_history_features, load_processed_results
-from boston_marathon.mixed_effects import compute_marginal_log_seconds_prediction
+from . import config
+from .inference import compute_bca_cluster_bootstrap_interval
+from .regression import PRE_RACE_DEMOGRAPHIC_AND_HISTORY_FEATURES, PRE_RACE_DEMOGRAPHIC_FEATURES
+from .data import add_centered_pre_race_features, add_prior_boston_history_features, load_processed_results
+from .mixed_effects import compute_marginal_log_seconds_prediction
 
 MODELS = ['M0', 'M1', 'M2', 'M3', 'M4', 'M5']
 MODEL_DESCRIPTIONS = {'M0': 'Mean baseline', 'M1': '+ demographics (quadratic regression, HC3-robust)', 'M2': '+ prior Boston history (history regression, HC3-robust)', 'M3': '+ runner random effects (mixed-effects conditional)', 'M4': '+ cumulative splits through 5K (ridge regression)', 'M5': '+ cumulative splits through 40K (ridge regression)'}

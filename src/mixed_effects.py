@@ -10,8 +10,8 @@ from rpy2.robjects import conversion, default_converter, numpy2ri
 from rpy2.robjects.packages import importr
 from sklearn.metrics import root_mean_squared_error as rmse
 
-from boston_marathon import config
-from boston_marathon.data import add_centered_pre_race_features
+from . import config
+from .data import add_centered_pre_race_features
 
 _conv = default_converter + numpy2ri.converter
 importr('lme4')

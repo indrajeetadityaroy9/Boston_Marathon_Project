@@ -4,7 +4,7 @@ import pandas as pd
 import statsmodels.api as sm
 from sklearn.metrics import root_mean_squared_error as rmse
 
-from boston_marathon.config import PRE_RACE_FIXED_EFFECT_FEATURES as PRE_RACE_DEMOGRAPHIC_FEATURES
+from .config import PRE_RACE_FIXED_EFFECT_FEATURES as PRE_RACE_DEMOGRAPHIC_FEATURES
 PRE_RACE_DEMOGRAPHIC_AND_HISTORY_FEATURES = PRE_RACE_DEMOGRAPHIC_FEATURES + ['log1p_prior_appearances', 'prior_mean_time']
 
 

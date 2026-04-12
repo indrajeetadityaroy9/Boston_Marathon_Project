@@ -6,8 +6,8 @@ from scipy.stats import ks_2samp
 from sklearn.linear_model import RidgeCV
 from statsmodels.regression.quantile_regression import QuantReg
 
-from boston_marathon import config
-from boston_marathon.inference import fit_split_cqr
+from . import config
+from .inference import fit_split_cqr
 
 
 def compute_conformity_score_shift(train_df, test_df, rng):
