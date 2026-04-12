@@ -97,6 +97,3 @@ The pipeline is fully deterministic:
 | Intervals undercover under temporal shift | Coverage diagnostic | `calibration.py` | `tab_coverage.tex`, `fig3_coverage.pdf` |
 | Recalibration does not fully restore coverage | Recalibration experiments | `calibration.py` | `tab_recalibration.tex`, `fig4_conformity_shift.pdf` |
 
-## License
-
-Research code for academic use.
