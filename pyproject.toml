@@ -1,0 +1,28 @@
+[project]
+name = "boston-marathon-prediction"
+version = "0.1.0"
+description = "Information decomposition in marathon finish-time prediction"
+requires-python = ">=3.14"
+dependencies = [
+    "lightgbm==4.6.0",
+    "matplotlib==3.10.8",
+    "meteostat>=1.6",
+    "numpy==2.4.4",
+    "pandas==3.0.2",
+    "pingouin>=0.6.1",
+    "pyarrow==23.0.1",
+    "scikit-learn==1.8.0",
+    "scikit-posthocs>=0.9",
+    "scipy==1.17.1",
+    "statsmodels==0.14.6",
+]
+
+[project.scripts]
+marathon-pipeline = "marathon.pipeline:run_pipeline"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

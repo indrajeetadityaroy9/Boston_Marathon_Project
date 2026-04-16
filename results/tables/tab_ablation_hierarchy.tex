@@ -1,0 +1,11 @@
+\begin{tabular}{llrrrrr}
+\hline
+Stage & Description & $N$ & RMSE & $\Delta$RMSE [95\% CI] & Coverage (\%) & $2\hat{q}$ (min) \\
+\hline
+Sample Mean & Sample mean constant prediction & 26214 & 2538.0 & -- & -- & -- \\
+OLS Log Quadratic Demographics HC3 & + demographics (OLS log-quadratic, HC3 robust SE) & 26214 & 2317.3 & 220.7 [208.2, 233.4] & 89.2 & 118.4 \\
+OLS Log Quadratic Demographics History HC3 & + prior history (OLS log-quadratic, HC3 robust SE) & 26214 & 2126.8 & 190.5 [177.5, 203.0] & 89.7 & 82.5 \\
+Ridge GCV 5K Splits Demographics & + 5K cumulative splits (ridge, GCV-regularized) & 26214 & 1250.8 & 876.0 [849.3, 902.0] & 85.8 & 54.6 \\
+Ridge GCV 40K Splits Demographics & + 40K cumulative splits (ridge, GCV-regularized) & 26214 & 123.0 & 1127.9 [1093.2, 1157.0] & 86.4 & 2.8 \\
+\hline
+\end{tabular}
